@@ -13,7 +13,7 @@
 //! `scripts/cull_bench.py run` measures.
 
 use lrg_analysis::culling_config::get_culling_config;
-use lrg_analysis::eval::{evaluate, merge, EvalFixture, EvalReport};
+use lrg_analysis::eval::{evaluate, evaluate_by_preset, merge, EvalFixture, EvalReport};
 
 fn fixtures() -> Vec<EvalFixture> {
     let dir = concat!(
@@ -127,4 +127,57 @@ fn the_noisy_twin_does_not_win() {
     let r = current();
     let won = r.by_defect["noise"].won;
     assert!(won <= 5, "the noisy copy won {won} series");
+}
+
+/// `culling_preset: "auto"` chooses each series' preset from its photos'
+/// genre. Not knowing the genre a series was picked for, it must rank at least
+/// as well as the preset chosen by hand for it.
+#[test]
+fn auto_ranks_as_well_as_the_preset_chosen_by_hand() {
+    let fixtures = fixtures();
+    assert!(
+        fixtures.iter().all(|f| f
+            .groups
+            .iter()
+            .flat_map(|g| &g.photos)
+            .all(|p| p.metadata.get("genre").is_some())),
+        "every frame of the benchmark carries the genre the backend read"
+    );
+    let auto = merge(
+        &fixtures
+            .iter()
+            .map(|f| evaluate_by_preset(f, "auto", get_culling_config))
+            .collect::<Vec<_>>(),
+        "auto",
+    );
+    let by_hand = current();
+    let at_least = |name: &str, auto: f64, by_hand: f64| {
+        assert!(
+            auto + 1e-9 >= by_hand,
+            "{name}: auto {:.1}% below the preset chosen by hand ({:.1}%)",
+            auto * 100.0,
+            by_hand * 100.0
+        );
+    };
+    at_least(
+        "winner top-1",
+        auto.winner_accuracy(),
+        by_hand.winner_accuracy(),
+    );
+    at_least("pair order", auto.pair_accuracy(), by_hand.pair_accuracy());
+    at_least(
+        "reject precision",
+        auto.reject_precision(),
+        by_hand.reject_precision(),
+    );
+    at_least(
+        "reject recall",
+        auto.reject_recall(),
+        by_hand.reject_recall(),
+    );
+    at_least(
+        "must-keep kept",
+        1.0 - auto.must_keep_reject_rate(),
+        1.0 - by_hand.must_keep_reject_rate(),
+    );
 }

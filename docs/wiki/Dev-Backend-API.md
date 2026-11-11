@@ -612,7 +612,7 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | Field | Type | Description |
 |---|---|---|
 | `photo_ids` | array | Photos to cull. Ids with no stored record are skipped and counted in `summary.unindexed_count` |
-| `culling_preset` | string | `default`, `portrait`, `street`, `event`, `sports` or `wildlife`. 400 with `available_presets` for anything else |
+| `culling_preset` | string | `auto`, `default`, `portrait`, `street`, `event`, `sports` or `wildlife`. Absent means `default`. 400 with `available_presets` for anything else |
 | `time_delta_seconds` | int | Burst window. Absent means the preset's own |
 | `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
 | `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
@@ -621,6 +621,16 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
 | `include_embeddings` | bool | Echo each photo's SigLIP2 embedding as `embedding_q8`: base64 of a little-endian `f32` scale and one signed byte per dimension (`lrg_analysis::eval::quantize_embedding`, about 1.5 KB). For fixtures, whose replay groups the way the backend did only with it. Absent for a photo without an embedding |
 | `include_debug` | bool | Per-group thresholds and pairwise distances |
+
+**`auto`** chooses the preset per group from the photos' stored `genre`
+(`lrg_ml::genre`): the preset most of the group's genres call for
+(`lrg_analysis::culling_config::preset_for_genres`), a tie going to the one that asks more
+(event, portrait, sports, wildlife, default). `portrait` → `portrait`; `event`, `concert` and
+`street` → `event` (a guessed "street" does not switch focus off the way the `street` preset
+does on purpose); `sport` → `sports`; `wildlife` → `wildlife`; every other genre → `default`. The
+groups themselves are made with the preset most of the whole selection calls for (its burst
+window and distances), and each group's prompts are scored with its own preset's sets. Photos
+without a genre are counted in `warnings`; a group where none has one is `default`.
 
 Every preset except `default` judges the **moment**: the stronger of the
 preset's axis (`cull_semantic_iqa`: action, expression or candid) and, for
@@ -639,7 +649,7 @@ when every frame of a group carries the current `cull_subject_version` (all or
 nothing), and a frame without a subject abstains:
 
 - in the score, as `subject_focus_weight` of the sharpness the technical term reads,
-  against the group like exposure (0.5; `wildlife` 0.75);
+  against the group like exposure (0.75; `sports` and `wildlife` 1.0);
 - a subject at `reason_subject_focus_threshold` and close to the group's sharpest is
   *in focus*, and then a soft frame-wide reading is not a blur defect — a shallow depth
   of field or a pan, as sharp eyes already settle it for a face;
@@ -702,11 +712,12 @@ against the group.
 
 | Field | Type | Description |
 |---|---|---|
-| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
+| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count`, and `presets` — under `auto`, groups per chosen preset (`{"sports": 12, "default": 4}`), empty otherwise |
+| `groups[].preset` | string | The preset the group was ranked with: the request's, or under `auto` the one its genre called for. Also in `debug.culling_preset` |
 | `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
 | `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
 | `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`eye_squint`/`gaze_off_lens`/`mouth_open`/`face_luminance`/`face_across_stops`/`face_blown` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
-| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), photos whose moment was not judged. Empty when there is nothing to say |
+| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), under `auto` photos without a genre, photos whose subject was not measured, photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 
 The **aesthetic term** of every preset is the stored AestheticSigLIP score: `aesthetic_score` of a

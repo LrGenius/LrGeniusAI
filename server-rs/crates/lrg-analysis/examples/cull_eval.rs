@@ -15,7 +15,8 @@
 //! `--by-defect` adds a table per defect for fixtures that label them (the
 //! public benchmark, `testdata/cull_bench`). `--tune <knob>[,<knob>…]` tries
 //! each knob over a range of values, one at a time, and prints what each value
-//! scores; it suggests and changes nothing.
+//! scores; it suggests and changes nothing. `--preset auto` ranks each group
+//! with the preset its photos' genre calls for, as `/v1/cull/grade` does.
 //!
 //! Fixture format: see `lrg_analysis::eval::EvalFixture`, and
 //! `testdata/cull_eval/README.md` for how to build one from a real shoot.
@@ -23,7 +24,7 @@
 use std::path::{Path, PathBuf};
 
 use lrg_analysis::culling_config::{get_culling_config, CullingConfig};
-use lrg_analysis::eval::{evaluate, merge, EvalFixture, EvalReport};
+use lrg_analysis::eval::{evaluate_by_preset, merge, EvalFixture, EvalReport};
 
 fn load_fixtures(root: &Path) -> Vec<(PathBuf, EvalFixture)> {
     let mut paths: Vec<PathBuf> = if root.is_dir() {
@@ -50,13 +51,16 @@ fn load_fixtures(root: &Path) -> Vec<(PathBuf, EvalFixture)> {
         .collect()
 }
 
+/// Each fixture under `preset` (or its own), with `config_of` turning a preset
+/// name into the config to rank with — per group under `auto`.
 fn run(
     fixtures: &[(PathBuf, EvalFixture)],
-    config_for: impl Fn(&EvalFixture) -> CullingConfig,
+    preset: Option<&str>,
+    config_of: impl Fn(&str) -> CullingConfig,
 ) -> Vec<EvalReport> {
     fixtures
         .iter()
-        .map(|(_, f)| evaluate(f, &config_for(f)))
+        .map(|(_, f)| evaluate_by_preset(f, preset.unwrap_or(&f.culling_preset), &config_of))
         .collect()
 }
 
@@ -375,11 +379,7 @@ fn print_delta(before: &EvalReport, after: &EvalReport) {
 /// `--tune`: each named knob alone, over its values, on top of each fixture's
 /// own preset. Prints the measures per value and marks the best by
 /// [`tune_objective`]. A suggestion to look at, not a setting.
-fn tune(
-    fixtures: &[(PathBuf, EvalFixture)],
-    current: &dyn Fn(&EvalFixture) -> CullingConfig,
-    names: &str,
-) {
+fn tune(fixtures: &[(PathBuf, EvalFixture)], preset: Option<&str>, names: &str) {
     for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         let Some(knob) = KNOBS.iter().find(|k| k.name == name) else {
             let known: Vec<&str> = KNOBS.iter().map(|k| k.name).collect();
@@ -396,8 +396,8 @@ fn tune(
         let mut best: Option<(f64, f64)> = None;
         let mut rows = Vec::new();
         for &value in knob.values {
-            let reports = run(fixtures, |f| {
-                let mut cfg = current(f);
+            let reports = run(fixtures, preset, |p| {
+                let mut cfg = get_culling_config(p);
                 (knob.set)(&mut cfg, value);
                 cfg
             });
@@ -481,10 +481,8 @@ fn main() {
             .sum::<usize>(),
     );
 
-    let current = |f: &EvalFixture| {
-        get_culling_config(preset_override.as_deref().unwrap_or(&f.culling_preset))
-    };
-    let after = run(&fixtures, current);
+    let preset = preset_override.as_deref();
+    let after = run(&fixtures, preset, get_culling_config);
     print_block("current", &after, by_defect);
     if mistakes {
         print_mistakes(&after);
@@ -492,7 +490,7 @@ fn main() {
     let after_all = merge(&after, "current");
 
     if compare {
-        let before = run(&fixtures, |_| CullingConfig::python_parity());
+        let before = run(&fixtures, preset, |_| CullingConfig::python_parity());
         print_block(
             "python_parity (ranking before this pass)",
             &before,
@@ -502,12 +500,12 @@ fn main() {
     }
 
     if let Some(knob) = ablate_knob {
-        let before = run(&fixtures, |f| ablate(current(f), &knob));
+        let before = run(&fixtures, preset, |p| ablate(get_culling_config(p), &knob));
         print_block(&format!("ablated: {knob}"), &before, by_defect);
         print_delta(&merge(&before, "ablated"), &after_all);
     }
 
     if let Some(knobs) = tune_knobs {
-        tune(&fixtures, &current, &knobs);
+        tune(&fixtures, preset, &knobs);
     }
 }

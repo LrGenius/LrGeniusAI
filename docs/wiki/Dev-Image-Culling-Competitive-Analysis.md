@@ -79,7 +79,8 @@ Missing, in the order the plan takes them:
    two complaints above answered: only faces on the subject count, and a pan is
    named as one ([numbers](Dev-Image-Culling-Benchmark.md#the-subject-pass)).*
 3. **Choosing by genre** — the genre is stored for every photo, but the user
-   still picks the preset.
+   still picks the preset. *Done: `auto` chooses per burst
+   ([numbers](Dev-Image-Culling-Benchmark.md#the-preset-from-the-genre)).*
 4. **People who matter** (Aftershoot's key faces, Narrative's main faces) and
    small faces in a crowd.
 5. **Scenes, a target count and highlights** across a shoot.

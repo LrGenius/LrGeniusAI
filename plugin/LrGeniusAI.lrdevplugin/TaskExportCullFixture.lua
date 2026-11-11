@@ -29,7 +29,7 @@ local function exportOptionsDialog(ctx)
 
 	local props = LrBinding.makePropertyTable(ctx)
 	props.scope = prefs.cullFixtureScope or "selected"
-	props.cullingPreset = prefs.cullPreset or "default"
+	props.cullingPreset = prefs.cullPreset or "auto"
 	props.fixtureName = prefs.cullFixtureName or ""
 	props.notes = prefs.cullFixtureNotes or ""
 	props.groupsAreAuthoritative = prefs.cullFixtureAuthoritative == true
@@ -70,6 +70,7 @@ local function exportOptionsDialog(ctx)
 				f:popup_menu({
 					value = bind("cullingPreset"),
 					items = {
+						{ title = "auto", value = "auto" },
 						{ title = "default", value = "default" },
 						{ title = "portrait", value = "portrait" },
 						{ title = "street", value = "street" },

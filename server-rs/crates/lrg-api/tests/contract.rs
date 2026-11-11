@@ -1710,6 +1710,96 @@ async fn cull_says_once_when_the_subject_was_not_measured() {
     assert!(subject[0].contains("Download AI models"), "{}", subject[0]);
 }
 
+/// `culling_preset: "auto"`: each burst is ranked with the preset its photos'
+/// genre calls for, the response says which, and a photo without a genre is
+/// counted in a warning with the fix.
+#[tokio::test]
+async fn auto_ranks_each_burst_with_the_preset_its_genre_calls_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    // Two bursts an hour apart: a match, and a coast where one frame has no
+    // genre yet.
+    let photo = |id: &str, t: i64, hash: &str, sharpness: f64, genre: Option<&str>| {
+        let mut meta = serde_json::Map::new();
+        meta.insert("filename".into(), serde_json::json!(format!("{id}.jpg")));
+        meta.insert("capture_time".into(), serde_json::json!(t));
+        meta.insert("cull_phash".into(), serde_json::json!(hash));
+        meta.insert("cull_sharpness".into(), serde_json::json!(sharpness));
+        meta.insert("cull_exposure".into(), serde_json::json!(0.8));
+        meta.insert("cull_noise".into(), serde_json::json!(0.1));
+        meta.insert(
+            lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::SUBJECT_VERSION),
+        );
+        if let Some(g) = genre {
+            meta.insert(lrg_store::meta::GENRE_FIELD.into(), serde_json::json!(g));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: meta,
+        }
+    };
+    let t0 = 1_700_000_000;
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                photo("match0", t0, "ffffffffffffffff", 0.9, Some("sport")),
+                photo("match1", t0 + 1, "ffffffffffffffff", 0.8, Some("sport")),
+                photo("match2", t0 + 2, "ffffffffffffffff", 0.7, Some("portrait")),
+                photo(
+                    "coast0",
+                    t0 + 3600,
+                    "0000000000000000",
+                    0.9,
+                    Some("landscape"),
+                ),
+                photo("coast1", t0 + 3601, "0000000000000000", 0.8, None),
+            ],
+        )
+        .await
+        .unwrap();
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["match0", "match1", "match2", "coast0", "coast1"],
+            "culling_preset": "auto",
+            "use_iqa": false,
+            "db_path": db,
+        }),
+    )
+    .await;
+    let groups = json["groups"].as_array().expect("groups");
+    assert_eq!(groups.len(), 2, "{json}");
+    let preset_of = |first: &str| {
+        groups
+            .iter()
+            .find(|g| g["photo_ids"][0] == first)
+            .map(|g| g["preset"].clone())
+            .unwrap()
+    };
+    assert_eq!(preset_of("match0"), "sports");
+    assert_eq!(preset_of("coast0"), "default");
+    assert_eq!(json["summary"]["culling_preset"], "auto");
+    assert_eq!(json["summary"]["presets"]["sports"], 1);
+    assert_eq!(json["summary"]["presets"]["default"], 1);
+    let genre: Vec<&str> = json["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|w| w.contains("genre"))
+        .collect();
+    assert_eq!(genre.len(), 1, "{json}");
+    assert!(genre[0].starts_with("1 photo(s)"), "{}", genre[0]);
+    assert!(genre[0].contains("Prepare now"), "{}", genre[0]);
+}
+
 /// The default preset asks the prompts nothing, so a cull on it neither needs
 /// nor writes any — and has no text tower to miss.
 #[tokio::test]

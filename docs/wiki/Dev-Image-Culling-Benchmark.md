@@ -184,6 +184,41 @@ What decided it, each with its own evidence:
 `reason_panning_streak` changed nothing on the benchmark over their whole
 range: they stay where they were set, untested.
 
+## The preset from the genre
+
+Step 2 (2026-11-11): `culling_preset: "auto"` ranks each series with the
+preset its photos' genre calls for, without being told which genre the series
+was picked for (`cull_eval --preset auto`; the fixtures carry the `genre` the
+backend read). Same measurements, three ways of choosing:
+
+| | `default` for all | chosen by hand per genre | `auto` |
+|---|---|---|---|
+| winner top-1 | 75.0 % | 73.3 % | 77.5 % |
+| pair order | 84.6 % | 85.9 % | 86.2 % |
+| reject precision | 92.4 % | 93.0 % | 93.3 % |
+| reject recall | 70.0 % | 69.2 % | 69.2 % |
+| must-keep lost | 12.1 % | 9.1 % | 8.3 % |
+| reason named | 62.3 % | 62.3 % | 62.1 % |
+
+The genre model calls many photographs of people outdoors "street": 13 of 24
+portraits and 12 of 24 events. Ranked with the `street` preset, which leaves
+focus unjudged on purpose, `auto` found 63.4 % of the rejects and only 48 % of
+the eyes that missed focus. A guessed "street" is therefore ranked as an event;
+the `street` preset stays the photographer's own choice. Mapped to `default`
+instead, recall was the same and the winner 75.8 %; to `portrait`, 9.8 % of the
+keepers were lost.
+
+`auto` matched the genre the series was picked for in 80 of 120 series before
+that mapping (wildlife 22, sport 17, portrait 10, event 7, landscape 24); the
+rest went to a preset that ranks them as well. A fixture's prompt scores come
+from the preset it was exported under, so where `auto` chooses another, that
+group is ranked on the other preset's weights but the exported prompts'
+answers. On this benchmark that changes little: every frame of a series shows
+the same moment, so the answers are near equal within one.
+
+CI holds `auto` at or above the hand-chosen presets on winner, pairs, both
+reject numbers and keepers (`auto_ranks_as_well_as_the_preset_chosen_by_hand`).
+
 ## Open: what the benchmark found and this did not fix
 
 - **A face found in one frame and not the next.** Where the face detector

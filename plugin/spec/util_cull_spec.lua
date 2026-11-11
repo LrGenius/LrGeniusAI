@@ -18,7 +18,9 @@ describe("Util.cullPrepTasks", function()
 	it("adds the embedding for every preset that judges the moment", function()
 		-- Without an embedding the backend has nothing to judge emotion or
 		-- action from, and ranks sports and events on sharpness alone.
-		for _, preset in ipairs({ "sports", "event", "portrait", "street" }) do
+		-- `auto` too: the genre that chooses each burst's preset is read from
+		-- the same embedding.
+		for _, preset in ipairs({ "auto", "sports", "event", "portrait", "street", "wildlife" }) do
 			assert.is_true(Util.cullPresetJudgesMoment(preset), preset)
 			assert.are.same({ "cull", "embeddings" }, Util.cullPrepTasks(preset), preset)
 		end
@@ -33,6 +35,29 @@ describe("Util.cullPrepTasks", function()
 			{ "aesthetic", "face", "face_state", "subject" },
 			Util.requiredModelFamilies(Util.cullPrepTasks("default"))
 		)
+	end)
+end)
+
+describe("Util.cullPresetSummary", function()
+	it("names the one preset of a run", function()
+		assert.are.equal("Sports", Util.cullPresetSummary({ culling_preset = "sports" }, "default"))
+		assert.are.equal("Portrait", Util.cullPresetSummary(nil, "portrait"))
+		assert.are.equal("Default", Util.cullPresetSummary({}, nil))
+	end)
+
+	it("says what the genre chose under auto, most groups first", function()
+		local summary = {
+			culling_preset = "auto",
+			presets = { default = 4, sports = 12, event = 1 },
+		}
+		assert.are.equal(
+			"Auto by genre (Sports 12 groups, Default 4 groups, Event 1 group)",
+			Util.cullPresetSummary(summary, "auto")
+		)
+	end)
+
+	it("falls back to the preset name when an older backend sends no counts", function()
+		assert.are.equal("Auto by genre", Util.cullPresetSummary({ culling_preset = "auto", presets = {} }, "auto"))
 	end)
 end)
 

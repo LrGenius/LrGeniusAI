@@ -44,12 +44,23 @@ photos, so it works best on frames shot with AEB.
    - **Burst time window (seconds)** – how far apart two frames may be and
      still count as the same burst. `Auto (from preset)` uses the preset's
      own window: 1 s for Default, Portrait and Street, 2 s for Event and
-     Wildlife, 3 s for Sports.
+     Wildlife, 3 s for Sports — under the Auto preset, the window of the
+     preset most of the selection calls for.
    - **Culling preset** – tunes thresholds and weights:
-     `Default (sharpness, exposure, faces)`, `Portrait (faces and expression)`,
-     `Street (candid moments)`, `Event (people, emotion, moments)`,
-     `Sports (action and emotion)`, `Wildlife (animals, the subject sharp)`.
-     Every preset except Default also judges the moment; see below.
+     `Auto (each burst by its genre)`, `Default (sharpness, exposure, faces)`,
+     `Portrait (faces and expression)`, `Street (candid moments)`,
+     `Event (people, emotion, moments)`, `Sports (action and emotion)`,
+     `Wildlife (animals, the subject sharp)`. Every preset except Default also
+     judges the moment; see below.
+   - **Auto** is the default for a new setup: each burst is judged with the
+     preset its photos' genre calls for (Portrait, Event, Sports, Wildlife or
+     Default), so a wedding day with a football match in the afternoon is
+     culled with both. The completion message says what it chose. Photos the
+     AI has called "street" are judged as an event: the Street preset
+     deliberately ignores focus, and that should be your choice, not a guess.
+     On the [public benchmark](Dev-Image-Culling-Benchmark.md) Auto ranked at
+     least as well as the preset chosen by hand for every series. Choose a
+     preset yourself when you know better — it then applies to everything.
    - **Cull strength** – how many near-misses become reject candidates.
      `Gentle` keeps more alternates, `Strict` aims for one keeper per burst,
      `Balanced` is the preset's own margin. It only moves the score margin:

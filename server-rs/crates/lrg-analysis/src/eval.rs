@@ -53,7 +53,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::culling_config::CullingConfig;
-use crate::grouping::{group_and_sort_images_with_config, Group, GroupingInput, RankedPhoto};
+use crate::grouping::{
+    group_and_sort_images_with_config, partition_records, Group, GroupingInput, RankedPhoto,
+};
 
 /// One labelled photo.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -595,14 +597,70 @@ where
 /// the user actually gets — including whether grouping put the right frames
 /// together in the first place.
 pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
-    let records: Vec<GroupingInput> = fixture
+    let produced = group_and_sort_images_with_config(
+        fixture_records(fixture),
+        None,
+        None,
+        fixture.time_delta_seconds,
+        cfg,
+    );
+    score(fixture, produced)
+}
+
+/// [`evaluate`] under a preset name, with `config_of` turning a name into the
+/// config to use (a tuned or ablated one, say). Under `"auto"` it does what
+/// `/v1/cull/grade` does: groups with the preset most of the fixture's genres
+/// call for, and ranks each group with the one its own photos' genres call for
+/// (`stored_metadata.genre`).
+///
+/// One caveat: a fixture's prompt scores (`cull_semantic_iqa`) come from the
+/// preset it was exported under. Where `auto` chooses another, the group is
+/// ranked on the other preset's weights but those prompts' answers.
+pub fn evaluate_by_preset(
+    fixture: &EvalFixture,
+    preset: &str,
+    config_of: impl Fn(&str) -> CullingConfig,
+) -> EvalReport {
+    use crate::culling_config::{preset_for_genres, AUTO_PRESET};
+    if preset != AUTO_PRESET {
+        return evaluate(fixture, &config_of(preset));
+    }
+    let records = fixture_records(fixture);
+    let genre = |r: &GroupingInput| {
+        r.metadata
+            .get("genre")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let all: Vec<String> = records.iter().filter_map(genre).collect();
+    let grouping = preset_for_genres(all.iter().map(String::as_str)).unwrap_or("default");
+    let partition = partition_records(
+        records,
+        None,
+        None,
+        fixture.time_delta_seconds,
+        &config_of(grouping),
+    );
+    let presets: Vec<&'static str> = (0..partition.group_count())
+        .map(|g| {
+            let genres: Vec<String> = partition.members(g).filter_map(genre).collect();
+            preset_for_genres(genres.iter().map(String::as_str)).unwrap_or("default")
+        })
+        .collect();
+    let produced = partition.rank(|g| (config_of(presets[g]), Some(presets[g])));
+    score(fixture, produced)
+}
+
+fn fixture_records(fixture: &EvalFixture) -> Vec<GroupingInput> {
+    fixture
         .groups
         .iter()
         .flat_map(|g| g.photos.iter().map(to_grouping_input))
-        .collect();
-    let produced =
-        group_and_sort_images_with_config(records, None, None, fixture.time_delta_seconds, cfg);
+        .collect()
+}
 
+/// Scores what the grouper produced against the fixture's labels.
+fn score(fixture: &EvalFixture, produced: Vec<Group>) -> EvalReport {
     let mut report = EvalReport {
         fixture: fixture.name.clone(),
         ..Default::default()

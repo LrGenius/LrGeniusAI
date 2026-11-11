@@ -883,6 +883,90 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
 
 pub fn available_presets() -> Vec<&'static str> {
     vec![
-        "default", "event", "portrait", "sports", "street", "wildlife",
+        AUTO_PRESET,
+        "default",
+        "event",
+        "portrait",
+        "sports",
+        "street",
+        "wildlife",
     ]
+}
+
+/// Not a preset of its own: each group is ranked with the preset its photos'
+/// genre calls for ([`preset_for_genres`]). On its own — for grouping, or where
+/// no photo has a genre — it is `default`.
+pub const AUTO_PRESET: &str = "auto";
+
+/// The preset a photo genre (`lrg_ml::genre`'s ids) calls for. A concert is
+/// people and a moment under stage light, like an event; everything without
+/// people or a moment to judge — landscape, architecture, food, macro, the
+/// sky — is the default.
+///
+/// A "street" genre is ranked as an event, not with the `street` preset: that
+/// one leaves focus unjudged on purpose, which is the photographer's call to
+/// make, not a guess's. The genre model calls many photos of people outdoors
+/// "street" — on the public benchmark 13 of 24 portraits and 12 of 24 events —
+/// and the `street` preset then found 63 % of the rejects where `event` found
+/// 69 %, with as many keepers kept.
+pub fn preset_for_genre(genre: &str) -> &'static str {
+    match genre {
+        "portrait" => "portrait",
+        "event" | "concert" | "street" => "event",
+        "sport" => "sports",
+        "wildlife" => "wildlife",
+        _ => "default",
+    }
+}
+
+/// The preset most of these photos' genres call for, `None` when none has a
+/// genre. A tie goes to the preset that asks more of the photos (event, then
+/// portrait, sports, wildlife, default): a wedding burst split between
+/// "event" and "portrait" still has its moment judged.
+pub fn preset_for_genres<'a>(genres: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+    const ORDER: [&str; 5] = ["event", "portrait", "sports", "wildlife", "default"];
+    let mut counts = [0usize; ORDER.len()];
+    for genre in genres {
+        let preset = preset_for_genre(genre);
+        if let Some(i) = ORDER.iter().position(|p| *p == preset) {
+            counts[i] += 1;
+        }
+    }
+    let most = *counts.iter().max()?;
+    (most > 0).then(|| ORDER[counts.iter().position(|&c| c == most).unwrap_or(0)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_genre_majority_chooses_and_a_tie_asks_more() {
+        assert_eq!(preset_for_genres([]), None);
+        assert_eq!(
+            preset_for_genres(["sport", "sport", "landscape"]),
+            Some("sports")
+        );
+        // A burst of a speech, half read as a portrait: the moment still counts.
+        assert_eq!(
+            preset_for_genres(["portrait", "event", "concert", "portrait"]),
+            Some("event")
+        );
+        assert_eq!(preset_for_genres(["food", "other"]), Some("default"));
+        // A guess of "street" does not switch focus off.
+        assert_eq!(preset_for_genres(["street"]), Some("event"));
+        // Every preset a genre can call for is one the API accepts.
+        for genre in [
+            "portrait",
+            "event",
+            "concert",
+            "sport",
+            "wildlife",
+            "street",
+            "landscape",
+            "other",
+        ] {
+            assert!(available_presets().contains(&preset_for_genre(genre)));
+        }
+    }
 }

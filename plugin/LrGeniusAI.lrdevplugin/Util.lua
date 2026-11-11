@@ -2806,13 +2806,68 @@ end
 -- Mirrors the backend presets, where every one but `default` gives the moment
 -- weight. `default` spans every genre and has no moment question that is right
 -- for all of them. The moment is read from the SigLIP2 embedding, which is
--- why this decides what the cull prep pass computes.
+-- why this decides what the cull prep pass computes. `auto` counts too: it
+-- chooses each burst's preset from the genre, which is read from the same
+-- embedding.
 --
 -- @param preset string|nil Culling preset name.
 -- @return boolean
 --
 function Util.cullPresetJudgesMoment(preset)
 	return type(preset) == "string" and preset ~= "" and preset ~= "default"
+end
+
+local CULL_PRESET_NAMES = {
+	auto = "Auto by genre",
+	default = "Default",
+	event = "Event",
+	portrait = "Portrait",
+	sports = "Sports",
+	street = "Street",
+	wildlife = "Wildlife",
+}
+
+---
+-- The preset line of the cull's completion message.
+--
+-- Under `auto` the backend says how many groups each preset ranked
+-- (`summary.presets`), which is what the genre chose: most groups first.
+-- Otherwise the one preset of the run.
+--
+-- @param summary table|nil The `/v1/cull/grade` summary.
+-- @param requested string|nil The preset the dialog asked for.
+-- @return string
+--
+function Util.cullPresetSummary(summary, requested)
+	summary = type(summary) == "table" and summary or {}
+	local chosen = {}
+	if type(summary.presets) == "table" then
+		for name, count in pairs(summary.presets) do
+			if type(count) == "number" and count > 0 then
+				chosen[#chosen + 1] = { name = name, count = count }
+			end
+		end
+	end
+	if #chosen == 0 then
+		local name = summary.culling_preset or requested or "default"
+		return CULL_PRESET_NAMES[name] or tostring(name)
+	end
+	table.sort(chosen, function(a, b)
+		if a.count ~= b.count then
+			return a.count > b.count
+		end
+		return a.name < b.name
+	end)
+	local parts = {}
+	for _, entry in ipairs(chosen) do
+		parts[#parts + 1] = string.format(
+			"%s %d %s",
+			CULL_PRESET_NAMES[entry.name] or entry.name,
+			entry.count,
+			entry.count == 1 and "group" or "groups"
+		)
+	end
+	return "Auto by genre (" .. table.concat(parts, ", ") .. ")"
 end
 
 ---

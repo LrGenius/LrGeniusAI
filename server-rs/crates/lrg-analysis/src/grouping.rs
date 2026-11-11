@@ -192,6 +192,9 @@ pub struct Group {
     /// and is never `None` here — but `reject_candidate_photo_ids` is
     /// guaranteed empty.
     pub intentional_set: Option<IntentionalSet>,
+    /// The preset this group was ranked with, when the caller chose one per
+    /// group (`culling_preset: "auto"`); `None` when one config ranked all.
+    pub preset: Option<&'static str>,
 }
 
 impl Group {
@@ -1648,15 +1651,242 @@ pub fn group_and_sort_images(
 /// evaluation harness, which sweeps individual knobs to measure what each one
 /// is worth.
 pub fn group_and_sort_images_with_config(
-    mut records: Vec<GroupingInput>,
+    records: Vec<GroupingInput>,
     phash_threshold: Option<f64>,
     clip_threshold: Option<f64>,
     time_delta: Option<i64>,
     cfg: &CullingConfig,
 ) -> Vec<Group> {
-    if records.is_empty() {
-        return Vec::new();
+    let cfg = *cfg;
+    partition_records(records, phash_threshold, clip_threshold, time_delta, &cfg)
+        .rank(|_| (cfg, None))
+}
+
+/// The groups of a set of photos before any of them is ranked: the first half
+/// of [`group_and_sort_images_with_config`], for a caller that decides how to
+/// rank each group by what is in it. `culling_preset: "auto"` picks a preset
+/// per group from its photos' genre, and has to score that preset's prompts on
+/// them before they are ranked.
+pub struct Partition {
+    records: Vec<GroupingInput>,
+    group_of: Vec<usize>,
+    members: Vec<Vec<usize>>,
+    edge_kinds: HashMap<(usize, usize), &'static str>,
+    th: Thresholds,
+    cfg: CullingConfig,
+}
+
+impl Partition {
+    /// Every photo, in the grouper's order.
+    pub fn records(&self) -> &[GroupingInput] {
+        &self.records
     }
+
+    /// The same, to add what ranking reads — prompt scores — before
+    /// [`Self::rank`].
+    pub fn records_mut(&mut self) -> &mut [GroupingInput] {
+        &mut self.records
+    }
+
+    /// The group of each photo in [`Self::records`], `0..group_count()`.
+    pub fn group_of(&self) -> &[usize] {
+        &self.group_of
+    }
+
+    pub fn group_count(&self) -> usize {
+        self.members.len()
+    }
+
+    /// The photos of one group.
+    pub fn members(&self, group: usize) -> impl Iterator<Item = &GroupingInput> {
+        self.members[group].iter().map(|&i| &self.records[i])
+    }
+
+    /// Ranks each group with the config `choose` gives for it, and records the
+    /// preset name it gives as [`Group::preset`]. What makes a group, and
+    /// which groups are brackets, focus stacks or panoramas, stays with the
+    /// config the partition was made with.
+    pub fn rank(
+        self,
+        choose: impl Fn(usize) -> (CullingConfig, Option<&'static str>),
+    ) -> Vec<Group> {
+        let Partition {
+            records,
+            members,
+            edge_kinds,
+            th,
+            cfg,
+            ..
+        } = self;
+        let mut groups: Vec<Group> = Vec::with_capacity(members.len());
+        for (g, idxs) in members.into_iter().enumerate() {
+            // idxs are already in ascending original-index order, which is
+            // global-sort order, so component_records is pre-sorted.
+            let component: Vec<&GroupingInput> = idxs.iter().map(|&i| &records[i]).collect();
+            let group_photo_ids: Vec<String> =
+                component.iter().map(|r| r.photo_id.clone()).collect();
+
+            let capture_times: Vec<f64> = component.iter().filter_map(|r| r.capture_time).collect();
+            let time_span_seconds = if capture_times.len() >= 2 {
+                capture_times.iter().cloned().fold(f64::MIN, f64::max)
+                    - capture_times.iter().cloned().fold(f64::MAX, f64::min)
+            } else {
+                0.0
+            };
+
+            let mut pairwise_distances = Vec::new();
+            let mut pairwise_phash_distances = Vec::new();
+            let mut group_edge_types: HashSet<&'static str> = HashSet::new();
+            for a in 0..idxs.len() {
+                for b in (a + 1)..idxs.len() {
+                    let (gi, gj) = (idxs[a].min(idxs[b]), idxs[a].max(idxs[b]));
+                    let (left, right) = (&records[gi], &records[gj]);
+                    if let Some(d) = cosine_distance(
+                        effective_embedding(&left.embedding),
+                        effective_embedding(&right.embedding),
+                    ) {
+                        pairwise_distances.push(round4(d));
+                    }
+                    if let Some(d) = phash_hamming(left.phash, right.phash) {
+                        pairwise_phash_distances.push(d);
+                    }
+                    if let Some(&kind) = edge_kinds.get(&(gi, gj)) {
+                        group_edge_types.insert(kind);
+                    }
+                }
+            }
+
+            // `component` is in global-sort order, which for timed records is
+            // ascending capture time — the adjacency order the panorama rule needs.
+            let set_frames: Vec<SetFrame> = component
+                .iter()
+                .map(|r| SetFrame {
+                    capture_time: r.capture_time,
+                    exposure_bias: r.metadata.get("exposure_bias").and_then(Value::as_f64),
+                    phash: r.phash,
+                    embedding: effective_embedding(&r.embedding),
+                    faces: r
+                        .metadata
+                        .get("cull_face_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as usize,
+                    sharp_region: match (
+                        r.metadata
+                            .get("cull_sharp_region_x")
+                            .and_then(Value::as_f64),
+                        r.metadata
+                            .get("cull_sharp_region_y")
+                            .and_then(Value::as_f64),
+                    ) {
+                        (Some(x), Some(y)) => Some((x, y)),
+                        _ => None,
+                    },
+                })
+                .collect();
+            let intentional_set = detect_intentional_set(&set_frames, &cfg.sets);
+
+            let group_type: &'static str = if let Some(kind) = intentional_set {
+                kind.as_str()
+            } else if group_photo_ids.len() == 1 {
+                "single"
+            } else if group_edge_types.contains("near_duplicate")
+                && !group_edge_types.contains("burst")
+            {
+                "near_duplicate"
+            } else if time_span_seconds <= th.time_window_seconds {
+                "burst"
+            } else {
+                "near_duplicate"
+            };
+
+            let (rank_cfg, preset) = choose(g);
+            let ranked = rank_group_records(&component, group_type, intentional_set, &rank_cfg);
+            let group_id = format!("group_{:04}", g + 1);
+            // `None` when every frame is a reject candidate: a blurred single, or a
+            // burst where nothing came out. The best-ranked frame is still first
+            // in `photos`, but nothing is nominated as the pick.
+            let winner_photo_id = if ranked.is_empty() {
+                Some(group_photo_ids[0].clone())
+            } else {
+                ranked.iter().find(|r| r.winner).map(|r| r.photo_id.clone())
+            };
+            let alternate_photo_ids: Vec<String> = ranked
+                .iter()
+                .filter(|r| !r.winner && !r.reject_candidate)
+                .map(|r| r.photo_id.clone())
+                .collect();
+            let reject_candidate_photo_ids: Vec<String> = ranked
+                .iter()
+                .filter(|r| r.reject_candidate)
+                .map(|r| r.photo_id.clone())
+                .collect();
+
+            let mut edge_types: Vec<&'static str> = group_edge_types.into_iter().collect();
+            edge_types.sort_unstable();
+
+            groups.push(Group {
+                group_id,
+                group_type,
+                group_size: group_photo_ids.len(),
+                primary_photo_id: group_photo_ids[0].clone(),
+                photo_ids: group_photo_ids,
+                winner_photo_id,
+                alternate_photo_ids,
+                reject_candidate_photo_ids,
+                intentional_set,
+                photos: ranked,
+                min_capture_time: capture_times
+                    .iter()
+                    .cloned()
+                    .fold(None, |acc: Option<f64>, v| {
+                        Some(acc.map_or(v, |a| a.min(v)))
+                    }),
+                max_capture_time: capture_times
+                    .iter()
+                    .cloned()
+                    .fold(None, |acc: Option<f64>, v| {
+                        Some(acc.map_or(v, |a| a.max(v)))
+                    }),
+                time_span_seconds: (time_span_seconds * 1000.0).round_ties_even() / 1000.0,
+                pairwise_distances,
+                pairwise_phash_distances,
+                edge_types,
+                thresholds: (
+                    th.phash_hamming_threshold,
+                    round4(th.duplicate_distance_threshold),
+                    round4(th.burst_distance_threshold),
+                    th.duplicate_time_window_seconds,
+                    th.time_window_seconds,
+                ),
+                preset,
+            });
+        }
+
+        groups.sort_by(|a, b| {
+            a.min_capture_time
+                .is_none()
+                .cmp(&b.min_capture_time.is_none())
+                .then(
+                    a.min_capture_time
+                        .unwrap_or(f64::INFINITY)
+                        .partial_cmp(&b.min_capture_time.unwrap_or(f64::INFINITY))
+                        .unwrap(),
+                )
+                .then(a.primary_photo_id.cmp(&b.primary_photo_id))
+        });
+
+        groups
+    }
+}
+
+/// Groups photos without ranking them; see [`Partition`].
+pub fn partition_records(
+    mut records: Vec<GroupingInput>,
+    phash_threshold: Option<f64>,
+    clip_threshold: Option<f64>,
+    time_delta: Option<i64>,
+    cfg: &CullingConfig,
+) -> Partition {
     let cfg = *cfg;
     let th = derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta, &cfg);
 
@@ -1816,160 +2046,14 @@ pub fn group_and_sort_images_with_config(
         members[g].push(i);
     }
 
-    let mut groups: Vec<Group> = Vec::with_capacity(group_counter);
-    for (g, idxs) in members.into_iter().enumerate() {
-        // idxs are already in ascending original-index order, which is
-        // global-sort order, so component_records is pre-sorted.
-        let component: Vec<&GroupingInput> = idxs.iter().map(|&i| &records[i]).collect();
-        let group_photo_ids: Vec<String> = component.iter().map(|r| r.photo_id.clone()).collect();
-
-        let capture_times: Vec<f64> = component.iter().filter_map(|r| r.capture_time).collect();
-        let time_span_seconds = if capture_times.len() >= 2 {
-            capture_times.iter().cloned().fold(f64::MIN, f64::max)
-                - capture_times.iter().cloned().fold(f64::MAX, f64::min)
-        } else {
-            0.0
-        };
-
-        let mut pairwise_distances = Vec::new();
-        let mut pairwise_phash_distances = Vec::new();
-        let mut group_edge_types: HashSet<&'static str> = HashSet::new();
-        for a in 0..idxs.len() {
-            for b in (a + 1)..idxs.len() {
-                let (gi, gj) = (idxs[a].min(idxs[b]), idxs[a].max(idxs[b]));
-                let (left, right) = (&records[gi], &records[gj]);
-                if let Some(d) = cosine_distance(
-                    effective_embedding(&left.embedding),
-                    effective_embedding(&right.embedding),
-                ) {
-                    pairwise_distances.push(round4(d));
-                }
-                if let Some(d) = phash_hamming(left.phash, right.phash) {
-                    pairwise_phash_distances.push(d);
-                }
-                if let Some(&kind) = edge_kinds.get(&(gi, gj)) {
-                    group_edge_types.insert(kind);
-                }
-            }
-        }
-
-        // `component` is in global-sort order, which for timed records is
-        // ascending capture time — the adjacency order the panorama rule needs.
-        let set_frames: Vec<SetFrame> = component
-            .iter()
-            .map(|r| SetFrame {
-                capture_time: r.capture_time,
-                exposure_bias: r.metadata.get("exposure_bias").and_then(Value::as_f64),
-                phash: r.phash,
-                embedding: effective_embedding(&r.embedding),
-                faces: r
-                    .metadata
-                    .get("cull_face_count")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as usize,
-                sharp_region: match (
-                    r.metadata
-                        .get("cull_sharp_region_x")
-                        .and_then(Value::as_f64),
-                    r.metadata
-                        .get("cull_sharp_region_y")
-                        .and_then(Value::as_f64),
-                ) {
-                    (Some(x), Some(y)) => Some((x, y)),
-                    _ => None,
-                },
-            })
-            .collect();
-        let intentional_set = detect_intentional_set(&set_frames, &cfg.sets);
-
-        let group_type: &'static str = if let Some(kind) = intentional_set {
-            kind.as_str()
-        } else if group_photo_ids.len() == 1 {
-            "single"
-        } else if group_edge_types.contains("near_duplicate") && !group_edge_types.contains("burst")
-        {
-            "near_duplicate"
-        } else if time_span_seconds <= th.time_window_seconds {
-            "burst"
-        } else {
-            "near_duplicate"
-        };
-
-        let ranked = rank_group_records(&component, group_type, intentional_set, &cfg);
-        let group_id = format!("group_{:04}", g + 1);
-        // `None` when every frame is a reject candidate: a blurred single, or a
-        // burst where nothing came out. The best-ranked frame is still first
-        // in `photos`, but nothing is nominated as the pick.
-        let winner_photo_id = if ranked.is_empty() {
-            Some(group_photo_ids[0].clone())
-        } else {
-            ranked.iter().find(|r| r.winner).map(|r| r.photo_id.clone())
-        };
-        let alternate_photo_ids: Vec<String> = ranked
-            .iter()
-            .filter(|r| !r.winner && !r.reject_candidate)
-            .map(|r| r.photo_id.clone())
-            .collect();
-        let reject_candidate_photo_ids: Vec<String> = ranked
-            .iter()
-            .filter(|r| r.reject_candidate)
-            .map(|r| r.photo_id.clone())
-            .collect();
-
-        let mut edge_types: Vec<&'static str> = group_edge_types.into_iter().collect();
-        edge_types.sort_unstable();
-
-        groups.push(Group {
-            group_id,
-            group_type,
-            group_size: group_photo_ids.len(),
-            primary_photo_id: group_photo_ids[0].clone(),
-            photo_ids: group_photo_ids,
-            winner_photo_id,
-            alternate_photo_ids,
-            reject_candidate_photo_ids,
-            intentional_set,
-            photos: ranked,
-            min_capture_time: capture_times
-                .iter()
-                .cloned()
-                .fold(None, |acc: Option<f64>, v| {
-                    Some(acc.map_or(v, |a| a.min(v)))
-                }),
-            max_capture_time: capture_times
-                .iter()
-                .cloned()
-                .fold(None, |acc: Option<f64>, v| {
-                    Some(acc.map_or(v, |a| a.max(v)))
-                }),
-            time_span_seconds: (time_span_seconds * 1000.0).round_ties_even() / 1000.0,
-            pairwise_distances,
-            pairwise_phash_distances,
-            edge_types,
-            thresholds: (
-                th.phash_hamming_threshold,
-                round4(th.duplicate_distance_threshold),
-                round4(th.burst_distance_threshold),
-                th.duplicate_time_window_seconds,
-                th.time_window_seconds,
-            ),
-        });
+    Partition {
+        records,
+        group_of,
+        members,
+        edge_kinds,
+        th,
+        cfg,
     }
-
-    groups.sort_by(|a, b| {
-        a.min_capture_time
-            .is_none()
-            .cmp(&b.min_capture_time.is_none())
-            .then(
-                a.min_capture_time
-                    .unwrap_or(f64::INFINITY)
-                    .partial_cmp(&b.min_capture_time.unwrap_or(f64::INFINITY))
-                    .unwrap(),
-            )
-            .then(a.primary_photo_id.cmp(&b.primary_photo_id))
-    });
-
-    groups
 }
 
 #[cfg(test)]

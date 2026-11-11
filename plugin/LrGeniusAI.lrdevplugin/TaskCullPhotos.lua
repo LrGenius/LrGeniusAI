@@ -6,7 +6,7 @@ local function showCullDialog(ctx)
 	local props = LrBinding.makePropertyTable(ctx)
 	props.scope = prefs.cullScope or "selected"
 	props.timeDeltaSeconds = prefs.cullTimeDeltaSeconds or 2
-	props.cullingPreset = prefs.cullPreset or "default"
+	props.cullingPreset = prefs.cullPreset or "auto"
 	props.createDuplicatesCollection = prefs.cullCreateDuplicatesCollection ~= false
 	props.cullStrength = prefs.cullStrength or "balanced"
 	-- Flags are what a photographer culls *with*, so picks are flagged by
@@ -86,6 +86,7 @@ local function showCullDialog(ctx)
 				f:popup_menu({
 					value = bind("cullingPreset"),
 					items = {
+						{ title = "Auto (each burst by its genre)", value = "auto" },
 						{ title = "Default (sharpness, exposure, faces)", value = "default" },
 						{
 							title = "Portrait (faces and expression)",
@@ -925,7 +926,7 @@ LrTasks.startAsyncTask(function()
 			tostring(summary.alternate_count or #alternatePhotos),
 			tostring(summary.reject_candidate_count or #rejectPhotos),
 			tostring(summary.near_duplicate_group_count or nearDuplicateGroupCount),
-			tostring(summary.culling_preset or options.cullingPreset or "default")
+			Util.cullPresetSummary(summary, options.cullingPreset)
 		)
 		local setGroups = summary.intentional_set_group_count or setGroupCount
 		if setGroups and setGroups > 0 then

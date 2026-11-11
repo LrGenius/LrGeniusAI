@@ -9,8 +9,10 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Map, Value};
 
-use lrg_analysis::culling_config::{available_presets, get_culling_config};
-use lrg_analysis::grouping::{group_and_sort_images_with_config, Group, GroupingInput};
+use lrg_analysis::culling_config::{
+    available_presets, get_culling_config, preset_for_genres, CullingConfig, AUTO_PRESET,
+};
+use lrg_analysis::grouping::{partition_records, Group, GroupingInput};
 use lrg_ml::clip_iqa::PromptSet;
 use lrg_store::{meta, IMAGE_TABLE};
 
@@ -304,7 +306,7 @@ fn group_to_json(g: &Group, params: &GroupingParams, outcome: &GroupingOutcome) 
         );
         thresholds.insert("time_window_seconds".into(), json!(g.thresholds.4));
         json!({
-            "culling_preset": params.culling_preset,
+            "culling_preset": g.preset.unwrap_or(&params.culling_preset),
             "thresholds": thresholds,
             "pairwise_distances": g.pairwise_distances,
             "pairwise_phash_distances": g.pairwise_phash_distances,
@@ -324,6 +326,9 @@ fn group_to_json(g: &Group, params: &GroupingParams, outcome: &GroupingOutcome) 
         // group is, and it is absent-means-false for anything that predates it.
         "keep_all": g.keep_all(),
         "intentional_set": g.intentional_set.map(|k| k.as_str()),
+        // The preset this group was ranked with: the request's, or under
+        // `auto` the one its photos' genre called for.
+        "preset": g.preset.unwrap_or(&params.culling_preset),
         "group_size": g.group_size,
         "primary_photo_id": g.primary_photo_id,
         "photo_ids": g.photo_ids,
@@ -381,6 +386,9 @@ struct GroupingOutcome {
     subject_unmeasured: usize,
     /// Whether the subject model is on disk, which decides the fix.
     subject_model_ready: bool,
+    /// Under `culling_preset: "auto"`, ranked photos with no genre: their
+    /// group's preset was chosen from the others, or is `default`.
+    genre_missing: usize,
     /// CLIP-IQA signals the run asked for and had to do without, because
     /// their prompt vectors were neither stored nor obtainable from the text
     /// tower.
@@ -408,24 +416,29 @@ const MOMENT_SIGNAL: &str = "the AI judgement of the moment (emotion, expression
 const KISS_GATE_SIGNAL: &str = "the check whether closed eyes are a kiss or a laugh";
 
 /// The stored fields that reproduce a ranking run: every `cull_*` metric plus
-/// the two non-`cull_` inputs ranking and set detection actually read.
+/// the non-`cull_` inputs ranking, set detection and `auto`'s choice of preset
+/// actually read.
 ///
 /// An allow-list rather than the whole record, because the rest is captions,
 /// keywords and provider names — none of it affects culling, all of it is
 /// potentially identifying, and a fixture is meant to be shareable without
-/// shipping anything about the photographs themselves.
+/// shipping anything about the photographs themselves. The genre is one coarse
+/// word ("sport", "portrait").
 fn stored_cull_fields(metadata: &Map<String, Value>) -> Map<String, Value> {
     metadata
         .iter()
         .filter(|(k, _)| {
-            k.starts_with("cull_") || k.as_str() == "exposure_bias" || k.as_str() == "capture_time"
+            k.starts_with("cull_")
+                || k.as_str() == "exposure_bias"
+                || k.as_str() == "capture_time"
+                || k.as_str() == meta::GENRE_FIELD
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
 
-/// Scores every record that carries an embedding against one prompt set and
-/// writes the result under `key`.
+/// Scores every record that carries an embedding and that `asks` against one
+/// prompt set, and writes the result under `key`.
 ///
 /// No failure here fails the cull. Per photo, one that cannot be scored (no
 /// embedding — the fast cull pass stores none) is skipped: ranking has a
@@ -439,12 +452,13 @@ fn stored_cull_fields(metadata: &Map<String, Value>) -> Map<String, Value> {
 fn apply_prompt_scores(
     prompts: &PromptEmbeddings,
     records: &mut [GroupingInput],
+    asks: impl Fn(usize) -> bool,
     set: PromptSet,
     key: &str,
 ) -> Option<usize> {
     let prompts = prompts.prompt_set(set)?;
     let mut scored = 0usize;
-    for record in records.iter_mut() {
+    for (_, record) in records.iter_mut().enumerate().filter(|(i, _)| asks(*i)) {
         let Some(embedding) = record.embedding.as_ref() else {
             continue;
         };
@@ -524,6 +538,7 @@ async fn compute_groups(
             face_state_model_ready: state.face_state.is_cached(),
             subject_unmeasured: 0,
             subject_model_ready: state.subject.is_cached(),
+            genre_missing: 0,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),
@@ -545,76 +560,154 @@ async fn compute_groups(
     // The request's `semantic_weight` overrides the preset's for the ranking
     // itself, not just for deciding whether to score the axis — before, a
     // sweep scored the prompts and then ranked on the preset's own weight.
-    let mut cfg = get_culling_config(&params.culling_preset);
-    if let Some(weight) = params.semantic_weight {
-        cfg.ranking.semantic_weight = weight;
-    }
-    // The photographer's cull strength, applied on top of the preset's own
-    // margin so every preset keeps its relative calibration.
-    if let Some(scale) = params.reject_margin_scale {
-        cfg.ranking.reject_score_delta *= scale;
-    }
-    let ranking = &cfg.ranking;
-
-    // The moment is judged only where the preset weights it. Asking a
-    // landscape whether anyone is cheering produces a number that is then
-    // discarded — and its prompts are not worth preparing either.
-    let moment_sets: Vec<(&'static str, &'static str)> = if ranking.semantic_weight > 0.0 {
-        [
-            (ranking.semantic_prompt_set, "cull_semantic_iqa"),
-            (ranking.emotion_prompt_set, "cull_emotion_iqa"),
-        ]
-        .into_iter()
-        .filter_map(|(name, key)| name.map(|n| (n, key)))
-        .collect()
-    } else {
-        Vec::new()
+    // The photographer's cull strength is applied on top of the preset's own
+    // margin, so every preset keeps its relative calibration.
+    let config_of = |preset: &str| -> CullingConfig {
+        let mut cfg = get_culling_config(preset);
+        if let Some(weight) = params.semantic_weight {
+            cfg.ranking.semantic_weight = weight;
+        }
+        if let Some(scale) = params.reject_margin_scale {
+            cfg.ranking.reject_score_delta *= scale;
+        }
+        cfg
     };
-    let moment_asked = params.use_iqa && !moment_sets.is_empty();
-    let mut unavailable = None;
+    let genre_of = |r: &GroupingInput| -> Option<String> {
+        r.metadata
+            .get(meta::GENRE_FIELD)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+
+    // `auto` groups with the preset most of the selection calls for (its
+    // burst window and distances), then ranks each group with the preset most
+    // of *its* photos call for. Any other preset is one config for both.
+    let auto = params.culling_preset == AUTO_PRESET;
+    let requested: &'static str = available_presets()
+        .into_iter()
+        .find(|p| *p == params.culling_preset)
+        .unwrap_or("default");
+    let genres: Vec<Option<String>> = records.iter().map(genre_of).collect();
+    let genre_missing = if auto {
+        genres.iter().filter(|g| g.is_none()).count()
+    } else {
+        0
+    };
+    let grouping_preset = if auto {
+        preset_for_genres(genres.iter().flatten().map(String::as_str)).unwrap_or("default")
+    } else {
+        requested
+    };
 
     // The aesthetic term comes from the score indexing stored, not from a
     // prompt pass, so it is not behind `use_iqa` or an embedding.
     let aesthetic_missing = apply_aesthetic_scores(&mut records);
 
-    // Before grouping, because ranking runs inside it. Only when some photo
-    // can be scored: preparing the prompts may mean a text-tower run the first
-    // time ever, which is not worth paying for a run with nothing to score.
-    if params.use_iqa && embedded_count > 0 {
-        let mut passes: Vec<(PromptSet, &str, &'static str)> = Vec::new();
-        for (name, key) in &moment_sets {
-            match PromptSet::from_name(name) {
-                Some(set) => passes.push((set, key, MOMENT_SIGNAL)),
-                // A config typo. Log rather than fail: the rest of the ranking
-                // is unaffected, a cull that refuses to run over it helps
-                // nobody, and the preset tests exist to catch it first.
-                None => log::warn!(
-                    "culling preset {:?} names unknown prompt set {name:?}; skipping that signal",
-                    params.culling_preset
-                ),
+    let mut partition = partition_records(
+        records,
+        params.phash_threshold,
+        params.clip_threshold,
+        params.time_delta_seconds,
+        &config_of(grouping_preset),
+    );
+    let group_presets: Vec<&'static str> = (0..partition.group_count())
+        .map(|g| {
+            if auto {
+                let members: Vec<Option<String>> = partition.members(g).map(genre_of).collect();
+                preset_for_genres(members.iter().flatten().map(String::as_str)).unwrap_or("default")
+            } else {
+                requested
             }
+        })
+        .collect();
+    let mut configs: Vec<(&'static str, CullingConfig)> = Vec::new();
+    for &preset in &group_presets {
+        if !configs.iter().any(|(p, _)| *p == preset) {
+            configs.push((preset, config_of(preset)));
         }
-        // The kiss gate is asked whenever the preset sets a threshold, moment
-        // or not: it decides whether closed eyes count as a blink, which the
-        // ranking reads either way.
-        if ranking.eyes_closed_intent_threshold > 0.0 {
-            passes.push((
-                PromptSet::EyesClosedIntent,
-                "cull_eyes_closed_intent_iqa",
-                KISS_GATE_SIGNAL,
-            ));
+    }
+    let config = |preset: &str| -> CullingConfig {
+        configs
+            .iter()
+            .find(|(p, _)| *p == preset)
+            .map(|(_, c)| *c)
+            .unwrap_or_else(|| config_of(preset))
+    };
+    // Each photo's preset, aligned with `partition.records()`.
+    let photo_presets: Vec<&'static str> = partition
+        .group_of()
+        .iter()
+        .map(|&g| group_presets[g])
+        .collect();
+
+    // The moment is judged only where the preset weights it. Asking a
+    // landscape whether anyone is cheering produces a number that is then
+    // discarded — and its prompts are not worth preparing either.
+    let moment_sets = |cfg: &CullingConfig| -> Vec<(&'static str, &'static str)> {
+        if cfg.ranking.semantic_weight > 0.0 {
+            [
+                (cfg.ranking.semantic_prompt_set, "cull_semantic_iqa"),
+                (cfg.ranking.emotion_prompt_set, "cull_emotion_iqa"),
+            ]
+            .into_iter()
+            .filter_map(|(name, key)| name.map(|n| (n, key)))
+            .collect()
+        } else {
+            Vec::new()
+        }
+    };
+    let asks_moment = |preset: &str| params.use_iqa && !moment_sets(&config(preset)).is_empty();
+    let moment_asked = configs.iter().any(|(p, _)| asks_moment(p));
+    let mut unavailable = None;
+
+    // Before ranking, which reads them. Only when some photo can be scored:
+    // preparing the prompts may mean a text-tower run the first time ever,
+    // which is not worth paying for a run with nothing to score.
+    if params.use_iqa && embedded_count > 0 {
+        let mut passes: Vec<(&'static str, PromptSet, &str, &'static str)> = Vec::new();
+        for (preset, cfg) in &configs {
+            for (name, key) in moment_sets(cfg) {
+                match PromptSet::from_name(name) {
+                    Some(set) => passes.push((preset, set, key, MOMENT_SIGNAL)),
+                    // A config typo. Log rather than fail: the rest of the
+                    // ranking is unaffected, a cull that refuses to run over it
+                    // helps nobody, and the preset tests exist to catch it
+                    // first.
+                    None => log::warn!(
+                        "culling preset {preset:?} names unknown prompt set {name:?}; skipping \
+                         that signal"
+                    ),
+                }
+            }
+            // The kiss gate is asked whenever the preset sets a threshold,
+            // moment or not: it decides whether closed eyes count as a blink,
+            // which the ranking reads either way.
+            if cfg.ranking.eyes_closed_intent_threshold > 0.0 {
+                passes.push((
+                    preset,
+                    PromptSet::EyesClosedIntent,
+                    "cull_eyes_closed_intent_iqa",
+                    KISS_GATE_SIGNAL,
+                ));
+            }
         }
 
         // One preparation for every set the run asks, so a first run that
         // has to embed them pays for a single text-tower pass. Nothing to
         // prepare for a preset that asks no question of the prompts.
-        let sets: Vec<PromptSet> = passes.iter().map(|(set, _, _)| *set).collect();
+        let mut sets: Vec<PromptSet> = Vec::new();
+        for (_, set, _, _) in &passes {
+            if !sets.contains(set) {
+                sets.push(*set);
+            }
+        }
         let prompts =
             crate::prompt_embeddings::prepare(state, &crate::prompt_embeddings::texts_of(&sets))
                 .await;
         let mut lost: Vec<&'static str> = Vec::new();
-        for (set, key, signal) in passes {
-            if apply_prompt_scores(&prompts, &mut records, set, key).is_none()
+        for (preset, set, key, signal) in passes {
+            let asks = |i: usize| photo_presets[i] == preset;
+            if apply_prompt_scores(&prompts, partition.records_mut(), asks, set, key).is_none()
                 && !lost.contains(&signal)
             {
                 lost.push(signal);
@@ -631,67 +724,51 @@ async fn compute_groups(
         }
     }
 
-    // Counted on what ranking will see, so the warning describes the run that
-    // happened rather than the store.
-    let moment_missing = if moment_asked {
+    // Counted on what ranking will see, each photo by the preset of its group,
+    // so the warnings describe the run that happened rather than the store.
+    let records = partition.records();
+    let counted = |test: &dyn Fn(&GroupingInput, &CullingConfig) -> bool| -> usize {
         records
             .iter()
-            .filter(|r| {
-                !r.metadata.contains_key("cull_semantic_iqa")
-                    && !r.metadata.contains_key("cull_emotion_iqa")
-            })
+            .zip(&photo_presets)
+            .filter(|(r, p)| test(r, &config(p)))
             .count()
-    } else {
-        0
     };
-
-    let focus_unmeasured = if cfg.ranking.judges_focus() {
-        records
-            .iter()
-            .filter(|r| {
-                r.metadata
-                    .get("cull_face_count")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0)
-                    > 0
-                    && !r
-                        .metadata
-                        .contains_key(lrg_analysis::grouping::FOCUS_VERSION_KEY)
-            })
-            .count()
-    } else {
-        0
+    let has_faces = |r: &GroupingInput| {
+        r.metadata
+            .get("cull_face_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            > 0
     };
-
+    let moment_missing = counted(&|r, cfg| {
+        params.use_iqa
+            && !moment_sets(cfg).is_empty()
+            && !r.metadata.contains_key("cull_semantic_iqa")
+            && !r.metadata.contains_key("cull_emotion_iqa")
+    });
+    let focus_unmeasured = counted(&|r, cfg| {
+        cfg.ranking.judges_focus()
+            && has_faces(r)
+            && !r
+                .metadata
+                .contains_key(lrg_analysis::grouping::FOCUS_VERSION_KEY)
+    });
     // Every preset reads the eyes (the blink rules), so this is counted
     // whatever the preset.
-    let state_unmeasured = records
-        .iter()
-        .filter(|r| {
-            r.metadata
-                .get("cull_face_count")
-                .and_then(Value::as_i64)
-                .unwrap_or(0)
-                > 0
-                && !lrg_analysis::grouping::face_state_is_current(&r.metadata)
-        })
-        .count();
-
-    // Only when the preset reads the subject at all; counted whether or not
+    let state_unmeasured = counted(&|r, _| {
+        has_faces(r) && !lrg_analysis::grouping::face_state_is_current(&r.metadata)
+    });
+    // Only where the preset reads the subject at all; counted whether or not
     // the model is there, since the fix differs and both are said.
-    let judges_subject = cfg.ranking.subject_focus_weight > 0.0
-        || cfg.ranking.reason_subject_focus_threshold > 0.0
-        || cfg.ranking.reject_subject_focus_threshold > 0.0;
-    let subject_unmeasured = if judges_subject {
-        records
-            .iter()
-            .filter(|r| !lrg_analysis::grouping::subject_is_current(&r.metadata))
-            .count()
-    } else {
-        0
-    };
+    let subject_unmeasured = counted(&|r, cfg| {
+        (cfg.ranking.subject_focus_weight > 0.0
+            || cfg.ranking.reason_subject_focus_threshold > 0.0
+            || cfg.ranking.reject_subject_focus_threshold > 0.0)
+            && !lrg_analysis::grouping::subject_is_current(&r.metadata)
+    });
 
-    // Captured after the IQA passes and before grouping consumes the records,
+    // Captured after the IQA passes and before ranking consumes the records,
     // so it reflects exactly the inputs this run ranked on — including the
     // injected `cull_*_iqa` scores, which are not stored
     // in the database and would otherwise be unreproducible from a fixture.
@@ -720,16 +797,14 @@ async fn compute_groups(
         Default::default()
     };
 
+    let groups = partition.rank(|g| {
+        let preset = group_presets[g];
+        (config(preset), auto.then_some(preset))
+    });
     Ok(GroupingOutcome {
         stored_metadata,
         embeddings,
-        groups: group_and_sort_images_with_config(
-            records,
-            params.phash_threshold,
-            params.clip_threshold,
-            params.time_delta_seconds,
-            &cfg,
-        ),
+        groups,
         missing_count,
         embedded_count,
         moment_asked,
@@ -741,6 +816,7 @@ async fn compute_groups(
         face_state_model_ready: state.face_state.is_cached(),
         subject_unmeasured,
         subject_model_ready: state.subject.is_cached(),
+        genre_missing,
         unavailable,
     })
 }
@@ -837,6 +913,14 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
             outcome.state_unmeasured
         ));
     }
+    if outcome.genre_missing > 0 {
+        warnings.push(format!(
+            "{} photo(s) have no genre yet, so the preset for their groups was chosen from the \
+             other photos in them, or was Default where none had one. Run 'Cull Similar Photos' \
+             again and choose 'Prepare now' to read their genre.",
+            outcome.genre_missing
+        ));
+    }
     if outcome.subject_unmeasured > 0 {
         warnings.push(if outcome.subject_model_ready {
             format!(
@@ -894,6 +978,17 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
         ));
     }
     warnings
+}
+
+/// Groups per preset, for groups ranked with a preset of their own (`auto`);
+/// empty otherwise.
+fn preset_counts(groups: &[Group]) -> Map<String, Value> {
+    let mut counts = Map::new();
+    for preset in groups.iter().filter_map(|g| g.preset) {
+        let n = counts.get(preset).and_then(Value::as_u64).unwrap_or(0);
+        counts.insert(preset.to_string(), json!(n + 1));
+    }
+    counts
 }
 
 /// The legacy single-string `warning`, for a plugin that predates `warnings`:
@@ -999,6 +1094,9 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
                     "intentional_set_group_count": set_groups,
                     "intentional_set_photo_count": set_photos,
                     "culling_preset": params.culling_preset,
+                    // Under `auto`, how many groups each preset ranked, so the
+                    // plugin can say what the genre chose.
+                    "presets": preset_counts(&outcome.groups),
                     // Surfaced so the plugin can tell the user that some of
                     // their selection was skipped rather than silently ranking
                     // fewer photos than they picked.
@@ -1037,6 +1135,7 @@ mod tests {
             face_state_model_ready: true,
             subject_unmeasured: 0,
             subject_model_ready: true,
+            genre_missing: 0,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),
