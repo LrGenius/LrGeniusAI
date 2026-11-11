@@ -242,6 +242,18 @@ impl DefectStats {
     }
 }
 
+/// A frame the benchmark's labels say was judged wrong in the way a
+/// photographer forgives least, for `cull_eval --mistakes`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mistake {
+    pub photo_id: String,
+    pub defect: Option<String>,
+    /// `"must-keep lost"` or `"wrong reason"`.
+    pub kind: &'static str,
+    /// What the explanation said.
+    pub reasons: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EvalReport {
     pub fixture: String,
@@ -269,6 +281,8 @@ pub struct EvalReport {
     pub forbid_seen: usize,
     /// The same counts per `defect` label, for `cull_eval --by-defect`.
     pub by_defect: BTreeMap<String, DefectStats>,
+    /// Every must-keep frame nominated and every forbidden reason given.
+    pub mistakes: Vec<Mistake>,
     pub rejects_predicted: usize,
     pub rejects_labelled: usize,
     pub rejects_correct: usize,
@@ -495,6 +509,7 @@ pub fn merge(reports: &[EvalReport], name: &str) -> EvalReport {
         for (defect, stats) in &r.by_defect {
             out.by_defect.entry(defect.clone()).or_default().add(stats);
         }
+        out.mistakes.extend(r.mistakes.iter().cloned());
     }
     out.ndcg = if out.ranked_groups == 0 {
         0.0
@@ -777,6 +792,19 @@ pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
         if photo.must_keep {
             report.must_keep_labelled += 1;
             report.must_keep_rejected += usize::from(rejected);
+        }
+        for (wrong, kind) in [
+            (photo.must_keep && rejected, "must-keep lost"),
+            (misnamed, "wrong reason"),
+        ] {
+            if wrong {
+                report.mistakes.push(Mistake {
+                    photo_id: photo.photo_id.clone(),
+                    defect: photo.defect.clone(),
+                    kind,
+                    reasons: reasons.to_vec(),
+                });
+            }
         }
         if !photo.expect_reasons.is_empty() {
             report.reasons_expected += 1;

@@ -142,9 +142,9 @@ LRG_REQUIRE_GOLDENS=face,siglip   cargo test --workspace   # a subset
 LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family
 ```
 
-Family names are `face`, `auraface`, `facestate`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
+Family names are `face`, `auraface`, `facestate`, `subject`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
 single switch because they differ in cost by more than an order of magnitude
-(89 MB, 261 MB, 2.2 GB, 868 MB and 834 MB respectively).
+(89 MB, 261 MB, 7 MB, 123 MB, 2.2 GB, 868 MB and 834 MB respectively).
 
 CI uses both halves: `server-rs-tests.yml` downloads the face pair on every PR
 and sets `LRG_REQUIRE_GOLDENS=face`, while the nightly `golden-tests-full.yml`
@@ -482,6 +482,26 @@ Published by `.github/workflows/model-assets-face-state.yml` to the fixed
 `face-state-assets-v1` tag. The golden test (`lrg-ml/tests/face_state_goldens.rs`,
 family `facestate`, which also needs the `face` pair to find the face) checks
 the pipeline against MediaPipe's own FaceLandmarker on the reference portrait.
+
+### Subject detection (RF-DETR-Seg Nano)
+
+Culling finds a photo's subject to measure focus on it and on the background
+(`lrg_ml::subject`, `lrg_imaging::subject_focus`). One file, exported from
+Roboflow's rfdetr package (Apache-2.0) and checked against PyTorch:
+
+```bash
+uv run --no-project --python 3.12 server-rs/scripts/export_subject_rfdetr.py \
+  --output-dir subject-assets --goldens server-rs/testdata/subject_goldens.json
+export LRG_SUBJECT_ONNX=/path/to/subject-assets/subject_rfdetr_seg_nano.onnx
+```
+
+Without the env var `lrg-ml` falls back to
+`~/.cache/lrgenius/models/subject_rfdetr_seg_nano.onnx`. Published by
+`.github/workflows/model-assets-subject.yml` to the fixed `subject-assets-v1`
+tag. The golden test (`lrg-ml/tests/subject_goldens.rs`, family `subject`)
+checks the preprocessing and the detections against the exported model run
+from Python on the reference portrait. float32: onnxconverter's float16 graph
+does not load in ONNX Runtime (mixed types at the first convolution).
 
 ### Local LLM (in-process llama.cpp)
 

@@ -328,6 +328,7 @@ async fn unload(State(state): State<Arc<AppState>>) -> Json<Value> {
     state.siglip.unload();
     state.aesthetic.unload();
     state.face.unload();
+    state.subject.unload();
     state.bioclip.unload();
     // Store handles stay open (LanceDB keeps its own lazy IO, nothing to
     // proactively drop).
@@ -399,6 +400,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (aesthetic_status, aesthetic_error) = state.aesthetic.status();
     let (face_status, face_error) = state.face.status();
     let (face_state_status, face_state_error) = state.face_state.status();
+    let (subject_status, subject_error) = state.subject.status();
     let (species_status, species_error) = state.bioclip.status();
     // Deliberately no LLM provider status here: this GET carries no API keys
     // or base URLs to probe (unlike POST /models, which accepts them), so
@@ -426,6 +428,8 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "face_recognizer": state.face.recognizer().as_str(),
         "face_state_model": face_state_status,
         "face_state_error": face_state_error,
+        "subject_model": subject_status,
+        "subject_error": subject_error,
         "species_model": species_status,
         "species_error": species_error,
     }))

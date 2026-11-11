@@ -63,6 +63,9 @@ fn models_absent() -> ModelAssetPaths {
             mesh_onnx: dir.join("face_mesh_v2.onnx"),
             blendshapes_onnx: dir.join("face_blendshapes_v2.onnx"),
         },
+        subject: lrg_ml::subject::SubjectPaths {
+            onnx: dir.join("subject_rfdetr_seg_nano.onnx"),
+        },
         bioclip: lrg_ml::bioclip::BioclipModelPaths {
             image_onnx: dir.join("bioclip2_image.onnx"),
             taxa_bin: dir.join("bioclip2_taxa.bin"),
@@ -369,7 +372,17 @@ async fn model_assets_report_every_family_the_plugin_reads() {
         .iter()
         .map(|family| family["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["clip", "aesthetic", "bioclip", "face", "face_state"]);
+    assert_eq!(
+        ids,
+        [
+            "clip",
+            "aesthetic",
+            "bioclip",
+            "face",
+            "face_state",
+            "subject"
+        ]
+    );
     for family in families {
         assert_eq!(family["ready"], serde_json::json!(false), "{family}");
         assert_eq!(family["downloadable"], serde_json::json!(true), "{family}");
@@ -1157,6 +1170,16 @@ async fn check_unprocessed_re_queues_only_a_different_embedding_model() {
 /// Seeds `count` photos one second apart with identical pHashes, i.e. an
 /// obvious burst that grouping must collapse into a single group.
 async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
+    seed_burst_measured(state, count, with_embedding, true).await;
+}
+
+/// [`seed_burst`], with or without the subject pass behind it.
+async fn seed_burst_measured(
+    state: &Arc<AppState>,
+    count: usize,
+    with_embedding: bool,
+    subject_measured: bool,
+) {
     let store = state.store().unwrap();
     let records: Vec<lrg_store::StoreRecord> = (0..count)
         .map(|i| {
@@ -1185,6 +1208,18 @@ async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
                 "aesthetic_model".into(),
                 serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
             );
+            // Through the subject pass, which found nothing: "no subject" is
+            // an answer too, so a cull has nothing to say about it either.
+            if subject_measured {
+                meta.insert(
+                    lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+                    serde_json::json!(lrg_analysis::grouping::SUBJECT_VERSION),
+                );
+                meta.insert(
+                    "cull_subject_model".into(),
+                    serde_json::json!(lrg_ml::subject::MODEL_ID),
+                );
+            }
             lrg_store::StoreRecord {
                 id: format!("burst{i}"),
                 vector: with_embedding.then(|| vec![0.5f32; 1152]),
@@ -1649,6 +1684,32 @@ async fn a_second_database_is_filled_with_prompts_from_memory() {
     );
 }
 
+/// Photos prepared before the subject pass are ranked on frame-wide sharpness,
+/// and the response says so once, with the fix for a model that is not on
+/// disk.
+#[tokio::test]
+async fn cull_says_once_when_the_subject_was_not_measured() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    seed_burst_measured(&state, 3, true, false).await;
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db}),
+    )
+    .await;
+    let warnings = json["warnings"].as_array().expect("warnings");
+    let subject: Vec<&str> = warnings
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|w| w.contains("subject"))
+        .collect();
+    assert_eq!(subject.len(), 1, "{json}");
+    assert!(subject[0].contains("3 photo(s)"), "{}", subject[0]);
+    assert!(subject[0].contains("Download AI models"), "{}", subject[0]);
+}
+
 /// The default preset asks the prompts nothing, so a cull on it neither needs
 /// nor writes any — and has no text tower to miss.
 #[tokio::test]
@@ -1896,11 +1957,16 @@ async fn check_unprocessed_understands_the_cull_task() {
     let store = state.store().unwrap();
 
     // A prepared row carries a capture time: grouping runs on it, and a row
-    // without one is reported again (see `undated` below).
+    // without one is reported again (see `undated` below). It also carries the
+    // metrics version it was measured with (see `measured_before_fine_noise`).
     let row = |phash: Option<&str>, faces_present: Option<bool>| {
         let mut m = serde_json::Map::new();
         if let Some(p) = phash {
             m.insert("cull_phash".into(), serde_json::json!(p));
+            m.insert(
+                "cull_metrics_version".into(),
+                serde_json::json!(lrg_imaging::metrics::METRICS_VERSION),
+            );
         }
         if let Some(f) = faces_present {
             m.insert("cull_faces_present".into(), serde_json::json!(f));
@@ -1961,6 +2027,17 @@ async fn check_unprocessed_understands_the_cull_task() {
                         m
                     },
                 },
+                // Prepared before grain was measured at full working size:
+                // measured once more, then never again.
+                lrg_store::StoreRecord {
+                    id: "measured_before_fine_noise".into(),
+                    vector: None,
+                    metadata: {
+                        let mut m = row(Some("abcd0123abcd0128"), Some(false));
+                        m.remove("cull_metrics_version");
+                        m
+                    },
+                },
             ],
         )
         .await
@@ -1975,7 +2052,7 @@ async fn check_unprocessed_understands_the_cull_task() {
                         "photo_ids": [
                             "done_faceless", "done_with_faces",
                             "needs_face_pass", "needs_everything", "unknown",
-                            "undated", "undated_for_good",
+                            "undated", "undated_for_good", "measured_before_fine_noise",
                         ],
                         "tasks": "cull",
                         "regenerate_metadata": "false",
@@ -1992,7 +2069,13 @@ async fn check_unprocessed_understands_the_cull_task() {
     let json = body_json(response).await;
     assert_eq!(
         json["photo_ids"],
-        serde_json::json!(["needs_face_pass", "needs_everything", "unknown", "undated"]),
+        serde_json::json!([
+            "needs_face_pass",
+            "needs_everything",
+            "unknown",
+            "undated",
+            "measured_before_fine_noise"
+        ]),
         "a faceless photo that has been culled must not be reported forever, and \
          neither is one whose capture time is known to be unavailable"
     );
@@ -4074,6 +4157,10 @@ async fn check_unprocessed_remeasures_faces_prepared_before_eye_focus() {
         m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
         m.insert("cull_face_count".into(), serde_json::json!(faces));
         m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
+        m.insert(
+            "cull_metrics_version".into(),
+            serde_json::json!(lrg_imaging::metrics::METRICS_VERSION),
+        );
         if version {
             m.insert("cull_focus_version".into(), serde_json::json!(1));
         }
@@ -4265,6 +4352,10 @@ async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
         m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
         m.insert("cull_face_count".into(), serde_json::json!(faces));
         m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
+        m.insert(
+            "cull_metrics_version".into(),
+            serde_json::json!(lrg_imaging::metrics::METRICS_VERSION),
+        );
         m.insert("cull_focus_version".into(), serde_json::json!(1));
         if let Some(version) = state {
             m.insert("cull_face_state_version".into(), serde_json::json!(version));

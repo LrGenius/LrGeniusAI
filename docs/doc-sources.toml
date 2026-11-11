@@ -163,6 +163,7 @@ sources = [
 sources = [
   "server-rs/scripts/cull_bench.py",
   "server-rs/crates/lrg-analysis/src/eval.rs",
+  "server-rs/crates/lrg-analysis/examples/cull_eval.rs",
   "server-rs/testdata/cull_bench/fixtures/*.json",
 ]
 
@@ -176,6 +177,9 @@ sources = [
   "server-rs/crates/lrg-imaging/src/focus.rs",
   "server-rs/crates/lrg-ml/src/face_state.rs",
   "server-rs/crates/lrg-analysis/src/face_aggregate.rs",
+  # "Focus on the subject": how the subject is found and its focus measured.
+  "server-rs/crates/lrg-ml/src/subject.rs",
+  "server-rs/crates/lrg-imaging/src/subject_focus.rs",
 ]
 
 [page."Help-AI-Agents.md"]

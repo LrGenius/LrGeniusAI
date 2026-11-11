@@ -121,6 +121,8 @@ async fn check_unprocessed(
     // Eye state, smile and gaze: only worth asking for when their model is on
     // disk, like the aesthetic score.
     let face_state_available = state.face_state.is_cached();
+    // The subject and focus on it, likewise only once its model is on disk.
+    let subject_available = state.subject.is_cached();
     // Which detector/recognizer pair this build writes. A compile-time
     // constant rather than something read off disk, unlike the BioCLIP head
     // above — see `lrg_ml::faces::MODEL_ID`.
@@ -254,10 +256,7 @@ async fn check_unprocessed(
                 // disk. Person assignments carry over, and this is how a catalog
                 // indexed earlier gets what People's filters ask about.
                 let needs_face_state = face_state_available
-                    && m.get("cull_face_count")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0)
-                        > 0
+                    && super::index_upload::faces_detected(&m) > 0
                     && (!lrg_analysis::grouping::face_state_is_current(&m)
                         || has_flag("face_rows_behind"));
                 let needs_faces = compute_faces
@@ -295,6 +294,29 @@ async fn check_unprocessed(
                         .unwrap_or(0)
                         > 0
                     && !lrg_analysis::grouping::face_state_is_current(&m);
+                // A photo prepared before the subject pass existed, or by
+                // another version of it, has its subject found and measured
+                // once the model is on disk. One with no subject carries the
+                // version too, so it is not asked for again.
+                // Its faces too, once the subject is known: they were counted
+                // before the subject told them from the bystanders.
+                let needs_cull_subject = compute_cull
+                    && subject_available
+                    && (!lrg_analysis::grouping::subject_is_current(&m)
+                        || m.get("cull_subject_model").and_then(Value::as_str)
+                            != Some(lrg_ml::subject::MODEL_ID)
+                        || (super::index_upload::faces_detected(&m) > 0
+                            && m.get(super::index_upload::FACE_SUBJECT_KEY)
+                                != m.get(lrg_analysis::grouping::SUBJECT_VERSION_KEY)));
+                // A photo measured before a culling metric existed (grain at
+                // full working size, version 2) is prepared once more; one
+                // that had nothing flat to measure carries the version and is
+                // not asked for again.
+                let needs_cull_noise = compute_cull
+                    && m.get("cull_metrics_version")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(1)
+                        < lrg_imaging::metrics::METRICS_VERSION;
                 // A photo is done for `species` only if it was checked *and*
                 // checked by the head currently on disk. Widening the taxa
                 // whitelist changes what BioCLIP can answer, so results from an
@@ -319,6 +341,8 @@ async fn check_unprocessed(
                     || needs_cull_time
                     || needs_cull_focus
                     || needs_cull_face_state
+                    || needs_cull_subject
+                    || needs_cull_noise
                     || needs_species
             })
             .cloned()

@@ -75,6 +75,7 @@ local function exportOptionsDialog(ctx)
 						{ title = "street", value = "street" },
 						{ title = "event", value = "event" },
 						{ title = "sports", value = "sports" },
+						{ title = "wildlife", value = "wildlife" },
 					},
 					width = 260,
 				}),

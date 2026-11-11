@@ -68,19 +68,25 @@ fn ranking_holds_its_level_on_the_benchmark() {
             min * 100.0
         );
     };
-    floor("winner top-1", r.winner_accuracy(), 0.33);
-    floor("pair order", r.pair_accuracy(), 0.75);
-    floor("reject precision", r.reject_precision(), 0.87);
-    floor("reject recall", r.reject_recall(), 0.68);
+    floor("winner top-1", r.winner_accuracy(), 0.73);
+    floor("pair order", r.pair_accuracy(), 0.85);
+    floor("reject precision", r.reject_precision(), 0.92);
+    floor("reject recall", r.reject_recall(), 0.69);
     assert!(
-        r.must_keep_reject_rate() <= 0.17,
-        "{:.1}% of the frames that must survive any cull were nominated (ceiling 17%)",
+        r.must_keep_reject_rate() <= 0.10,
+        "{:.1}% of the frames that must survive any cull were nominated (ceiling 10%)",
         r.must_keep_reject_rate() * 100.0
+    );
+    assert!(
+        r.forbidden_reason_rate() <= 0.02,
+        "{:.1}% of the frames were misnamed — a sharp subject called blurred (ceiling 2%)",
+        r.forbidden_reason_rate() * 100.0
     );
 }
 
-/// The defects the benchmark makes most clearly: a frame blurred all over and
-/// a frame whose eyes missed focus must be found as often as today.
+/// The defects the benchmark makes most clearly: a frame blurred all over, a
+/// frame whose eyes missed focus and one whose focus missed the subject must
+/// be found as often as today, and the last named for what it is.
 #[test]
 fn the_clear_defects_are_found() {
     let r = current();
@@ -88,6 +94,20 @@ fn the_clear_defects_are_found() {
         let s = &r.by_defect[defect];
         s.reject_found as f64 / s.reject_labelled.max(1) as f64
     };
+    let named = |defect: &str| {
+        let s = &r.by_defect[defect];
+        s.reasons_hit as f64 / s.reasons_expected.max(1) as f64
+    };
+    assert!(
+        found("subject_soft") >= 0.7,
+        "subject_soft {:.2}",
+        found("subject_soft")
+    );
+    assert!(
+        named("subject_soft") >= 0.8,
+        "subject_soft named {:.2}",
+        named("subject_soft")
+    );
     assert!(
         found("blur_strong") >= 0.7,
         "blur_strong {:.2}",
@@ -98,4 +118,13 @@ fn the_clear_defects_are_found() {
         "eyes_soft {:.2}",
         found("eyes_soft")
     );
+}
+
+/// A copy at about ISO 12 800 used to take the series 58 times in 120: grain
+/// reads as detail. It must stay the exception.
+#[test]
+fn the_noisy_twin_does_not_win() {
+    let r = current();
+    let won = r.by_defect["noise"].won;
+    assert!(won <= 5, "the noisy copy won {won} series");
 }

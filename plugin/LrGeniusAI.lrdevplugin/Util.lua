@@ -2668,10 +2668,12 @@ function Util.requiredModelFamilies(tasks)
 			needed.face = true
 			needed.face_state = true
 		elseif task == "cull" then
-			-- The fast cull ingest also scores each photo's aesthetic.
+			-- The fast cull ingest also scores each photo's aesthetic, and
+			-- finds its subject to measure focus on it.
 			needed.face = true
 			needed.face_state = true
 			needed.aesthetic = true
+			needed.subject = true
 		elseif task == "species" then
 			needed.bioclip = true
 		end
@@ -2679,7 +2681,7 @@ function Util.requiredModelFamilies(tasks)
 	-- Fixed order rather than pairs(): the result reaches a dialog, and a list
 	-- that reshuffles between runs reads like a different problem each time.
 	local result = {}
-	for _, id in ipairs({ "clip", "aesthetic", "face", "face_state", "bioclip" }) do
+	for _, id in ipairs({ "clip", "aesthetic", "face", "face_state", "subject", "bioclip" }) do
 		if needed[id] then
 			table.insert(result, id)
 		end

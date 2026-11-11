@@ -43,13 +43,13 @@ photos, so it works best on frames shot with AEB.
    - **Apply to** – `Selected photos only` or `Current view`.
    - **Burst time window (seconds)** – how far apart two frames may be and
      still count as the same burst. `Auto (from preset)` uses the preset's
-     own window: 1 s for Default, Portrait and Street, 2 s for Event, 3 s for
-     Sports.
+     own window: 1 s for Default, Portrait and Street, 2 s for Event and
+     Wildlife, 3 s for Sports.
    - **Culling preset** – tunes thresholds and weights:
      `Default (sharpness, exposure, faces)`, `Portrait (faces and expression)`,
      `Street (candid moments)`, `Event (people, emotion, moments)`,
-     `Sports (action and emotion)`. Every preset except Default also judges
-     the moment; see below.
+     `Sports (action and emotion)`, `Wildlife (animals, the subject sharp)`.
+     Every preset except Default also judges the moment; see below.
    - **Cull strength** – how many near-misses become reject candidates.
      `Gentle` keeps more alternates, `Strict` aims for one keeper per burst,
      `Balanced` is the preset's own margin. It only moves the score margin:
@@ -114,6 +114,8 @@ asks what the photo shows:
 - **Event** asks about candid moments and about emotion (laughing, crying with
   joy, hugging, guests reacting).
 - **Portrait** asks about expression, **Street** about candid, unposed moments.
+- **Wildlife** asks about behaviour: a bird in flight, an animal feeding,
+  running, looking back at the camera, two animals interacting.
 
 The stronger of the two answers counts, not their average: the goal
 celebration has no ball in it, and the shot on goal has nobody cheering yet.
@@ -195,6 +197,48 @@ the backend on another computer it is the JPEG the plugin sends, at the
 Photos prepared for culling before this existed have no eye-focus reading. The
 culling dialog offers to prepare them again; if you skip that, the bursts they
 are in are ranked without eye focus, and the culling warning says how many
+photos that affects.
+
+## Focus on the subject
+
+A frame can look soft for two opposite reasons. The focus missed: the subject
+is soft and, often, the background behind it sharp. Or the photographer meant
+it: a shallow depth of field, or a pan that streaks the background while the
+athlete or the bird stays sharp. Sharpness measured over the whole frame cannot
+tell the two apart, and that is the frame it most often gets wrong — it calls
+the keeper blurred, or keeps the one whose focus landed on the wall behind.
+
+So culling first finds what the photo is of: a person, an animal, a vehicle or
+a thing, with its outline (an AI model, part of **Download AI models**, about
+120 MB). It then measures focus on the subject and on the background
+separately.
+
+- **A sharp subject settles it.** When the subject reads sharp, a soft
+  background is a choice and the frame is never called blurred for it. A pan is
+  named as such ("a pan: the subject sharp, the background streaked").
+- **Focus behind the subject is named.** A frame whose subject is clearly
+  softer than in another frame of the burst says "the subject is not sharp",
+  or "focus landed behind it" when the background is the sharper part, and
+  becomes a reject candidate when it is clearly behind. A single photo is
+  never rejected for it alone.
+- **Faces come first.** For a person whose eyes could be measured, the eyes
+  decide, as before; the subject answers for everything faces cannot — an
+  athlete seen from the side, an animal, a car.
+- **Only faces on the subject count.** A second person soft in the background
+  of a portrait, or a spectator behind the athlete, is out of focus on purpose
+  and no longer makes the keeper a reject. When the subject is an animal or a
+  thing — a dog, a cake — and no face is on it, the people beside it are more
+  likely the point, and every face counts.
+- **What carries the subject belongs to it.** A rider and the horse, a cyclist
+  and the bicycle are one subject, so neither is ever taken for the background
+  the other stands against.
+- **Wildlife** leans on the subject most, and judges the moment by behaviour:
+  in flight, feeding, running, looking back. The animal's eye is not judged
+  yet.
+
+Photos prepared before this existed have no subject reading. The culling
+dialog offers to prepare them again; if you skip that, the bursts they are in
+are judged on frame-wide sharpness, and the culling warning says how many
 photos that affects.
 
 ## Eyes open, smile and gaze
@@ -306,6 +350,9 @@ For each photo, the backend stores culling-related fields such as:
   `cull_gaze_off_lens`, `cull_mouth_open`, `cull_face_luminance`,
   `cull_face_across_stops`, `cull_face_blown` (from the face model; absent when no
   face could be judged)
+- subject: `cull_subject_kind`, `cull_subject_area`, `cull_subject_focus` and
+  `cull_background_focus` (focus on the subject and on the rest of the frame),
+  `cull_background_streak` (how streaked the background is, high for a pan)
 - aesthetic scores: `cull_aesthetic` (a contrast-and-colour heuristic) and the
   photo's **Aesthetic score** from the AestheticSigLIP model, stored at
   indexing time (`aesthetic_score`) and read by culling as `cull_aesthetic_model`
@@ -330,6 +377,9 @@ Typical reason codes include:
 - `blurred`
 - `underexposed` / `overexposed`
 - `highlights_clipped` – highlights blown out where a sibling frame kept them
+- `noisier_than_sibling` – clearly grainier than a frame of the burst that is
+  otherwise as sharp: ranked below it, never a reject candidate for the grain
+  alone
 - `best_face_quality` / `weak_face_quality`
 - `eyes_open_best`
 - `eyes_closed` – the eyes are closed, and another frame of the burst has them
@@ -344,11 +394,18 @@ Typical reason codes include:
 - `face_out_of_focus` – the same for the whole face, where the eyes were too
   small to measure
 - `eyes_sharpest_in_group`
+- `subject_out_of_focus` – the subject is clearly softer than in a sharper
+  frame of the same burst
+- `focus_on_background` – the same, with the background the sharper part:
+  focus landed behind the subject
+- `subject_sharpest_in_group`
+- `panning` – the subject sharp, the background streaked by a pan; never
+  counted as blur
 - `possible_occlusion`
 - `no_face_detected_in_group`
 - `near_duplicate_weaker`
-- `peak_action` / `best_expression` / `strongest_moment` / `strongest_emotion`
-  – the moment decided the pick
+- `peak_action` / `best_expression` / `strongest_moment` / `strongest_emotion` /
+  `peak_behaviour` – the moment decided the pick
 - `eyes_closed_intentional` – eyes closed in a kiss or a laugh, not counted as a
   blink
 - `strong_moment_but_unusable` – the group's strongest moment, but a technical

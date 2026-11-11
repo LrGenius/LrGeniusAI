@@ -73,8 +73,11 @@ Already at the level of the best of them, by design:
 Missing, in the order the plan takes them:
 
 1. **A measurement.** Every threshold is a hypothesis; there was no benchmark.
+   *Done: [the public benchmark](Dev-Image-Culling-Benchmark.md).*
 2. **The subject without a face** — sport, wildlife, products. Sharpness is the
-   sharpest of 8×8 tiles, which can be the background.
+   sharpest of 8×8 tiles, which can be the background. *Done, with Lightroom's
+   two complaints above answered: only faces on the subject count, and a pan is
+   named as one ([numbers](Dev-Image-Culling-Benchmark.md#the-subject-pass)).*
 3. **Choosing by genre** — the genre is stored for every photo, but the user
    still picks the preset.
 4. **People who matter** (Aftershoot's key faces, Narrative's main faces) and

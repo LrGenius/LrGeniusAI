@@ -261,6 +261,29 @@ struct Scored<'a> {
     cull_face_luminance: Option<f64>,
     cull_face_across_stops: Option<f64>,
     cull_face_blown: Option<f64>,
+    /// Focus on the subject and on the background, and how streaked the
+    /// background is (`lrg_imaging::subject_focus`); `None` when there was no
+    /// subject or too little of it to measure.
+    cull_subject_focus: Option<f64>,
+    cull_background_focus: Option<f64>,
+    cull_background_streak: Option<f64>,
+    /// The photo went through the subject pass (`cull_subject_version` is
+    /// current), whether or not it found a subject.
+    subject_measured: bool,
+    /// Grain at full working size (`cull_noise_fine`), and whether it makes
+    /// this frame a noisy twin of a sibling — see
+    /// `RankingConfig::noise_twin_ratio`.
+    cull_noise_fine: Option<f64>,
+    noisy_twin: bool,
+    /// What [`RankingConfig::noise_twin_penalty`] took off the final score,
+    /// after the moment blend: given back when deciding rejects.
+    noise_cost: f64,
+    /// The subject labels: clearly softer than the group's sharpest subject,
+    /// and of those, sharper behind than on the subject.
+    subject_soft: bool,
+    focus_on_background: bool,
+    /// Subject sharp, background streaked along one axis: a pan.
+    panning: bool,
     /// A prominent face has its lids down on a lowered head: looking down.
     looking_down: bool,
     /// The photo went through the face state pass (`cull_face_state_version`
@@ -329,6 +352,23 @@ pub fn face_state_is_current(metadata: &serde_json::Map<String, Value>) -> bool 
     metadata.get(FACE_STATE_VERSION_KEY).and_then(Value::as_i64) == Some(FACE_STATE_VERSION)
 }
 
+/// Stored on every photo that went through the subject pass (the subject
+/// found by `lrg_ml::subject`, focus measured on it by
+/// `lrg_imaging::subject_focus`), subject or not. Like [`FOCUS_VERSION_KEY`],
+/// its presence tells "no subject in this photo" from "prepared before the
+/// pass existed".
+pub const SUBJECT_VERSION_KEY: &str = "cull_subject_version";
+
+/// The value stored under [`SUBJECT_VERSION_KEY`]. Bump it when stored
+/// readings become incomparable with new ones; `/index/unprocessed` then has
+/// those photos measured again, and until then they rank as before the pass.
+pub const SUBJECT_VERSION: i64 = 1;
+
+/// Whether a photo's subject was measured by this version of the pass.
+pub fn subject_is_current(metadata: &serde_json::Map<String, Value>) -> bool {
+    metadata.get(SUBJECT_VERSION_KEY).and_then(Value::as_i64) == Some(SUBJECT_VERSION)
+}
+
 /// How much eye focus one point of the 0–10 in the explanation is worth.
 ///
 /// On the reference portrait (`testdata/astronaut.jpg`) a Gaussian blur of
@@ -361,6 +401,7 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
             "blurred" => "noticeably blurred".to_string(),
             "motion_blur" => "softness looks like camera shake or subject motion".to_string(),
             "peak_action" => "strongest moment in the sequence".to_string(),
+            "peak_behaviour" => "the animal is doing the most in this frame".to_string(),
             "best_expression" => "best expression in the group".to_string(),
             "strongest_moment" => "the most genuine, unposed moment in the group".to_string(),
             "strongest_emotion" => "strongest emotion in the group".to_string(),
@@ -387,6 +428,15 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
             }
             "possible_occlusion" => "possible facial occlusion or weak visibility".to_string(),
             "eyes_out_of_focus" => "the eyes are not sharp — focus landed elsewhere".to_string(),
+            "subject_out_of_focus" => "the subject is not sharp".to_string(),
+            "focus_on_background" => {
+                "the subject is soft and the background sharp — focus landed behind it".to_string()
+            }
+            "subject_sharpest_in_group" => "sharpest subject in group".to_string(),
+            "panning" => "a pan: the subject sharp, the background streaked".to_string(),
+            "noisier_than_sibling" => {
+                "visibly grainier than an equally sharp sibling frame".to_string()
+            }
             "face_out_of_focus" => "the face is not sharp".to_string(),
             "eyes_sharpest_in_group" => "sharpest eyes in group".to_string(),
             "eyes_open_best" => "best eyes-open result in group".to_string(),
@@ -469,6 +519,19 @@ fn rank_group_records(
         }
         ((clip - least_clipped).max(0.0) / cfg.ranking.clip_penalty_scale).min(1.0)
     };
+    // Subject focus takes part in the sharpness only when every frame of the
+    // group went through the subject pass and has a reading — all or nothing,
+    // like the moment, so frames are never compared on two different
+    // questions. A single has nothing to compare with.
+    let subject_values: Vec<f64> = records
+        .iter()
+        .filter_map(|r| r.metadata.get("cull_subject_focus").and_then(Value::as_f64))
+        .map(unit)
+        .collect();
+    let blend_subject = cfg.ranking.subject_focus_weight > 0.0
+        && records.len() > 1
+        && subject_values.len() == records.len()
+        && records.iter().all(|r| subject_is_current(&r.metadata));
     let all_have_flat_noise = records.iter().all(|r| {
         r.metadata
             .get("cull_noise_flat")
@@ -487,6 +550,18 @@ fn rank_group_records(
             let sharpness_effective = match m.get("cull_sharpness_peak").and_then(Value::as_f64) {
                 Some(peak) => (1.0 - rk_peak_weight) * sharpness + rk_peak_weight * unit(peak),
                 None => sharpness,
+            };
+            // What the technical score reads as sharpness: part of it from the
+            // subject, scored against the group. `sharpness_effective` itself
+            // stays the frame's own reading, for the blur rules and the
+            // explanation.
+            let sharpness_scored = match m.get("cull_subject_focus").and_then(Value::as_f64) {
+                Some(subject) if blend_subject => {
+                    let w = cfg.ranking.subject_focus_weight.clamp(0.0, 1.0);
+                    (1.0 - w) * sharpness_effective
+                        + w * relative_to_group(&subject_values, unit(subject), cfg)
+                }
+                _ => sharpness_effective,
             };
             let motion_anisotropy = metric(m, "cull_motion_anisotropy", 0.0);
             let exposure_absolute = metric(m, "cull_exposure", 0.0);
@@ -533,7 +608,7 @@ fn rank_group_records(
                     + im.technical_weight_exposure
                     + im.technical_weight_noise;
                 unit(
-                    (im.technical_weight_sharpness * sharpness_effective
+                    (im.technical_weight_sharpness * sharpness_scored
                         + im.technical_weight_exposure * exposure
                         + im.technical_weight_noise * (1.0 - noise_penalty))
                         / weight_sum.max(1e-6)
@@ -628,6 +703,16 @@ fn rank_group_records(
                 cull_face_luminance: read("cull_face_luminance"),
                 cull_face_across_stops,
                 cull_face_blown: read("cull_face_blown"),
+                cull_subject_focus: read("cull_subject_focus"),
+                cull_background_focus: read("cull_background_focus"),
+                cull_background_streak: read("cull_background_streak"),
+                subject_measured: subject_is_current(m),
+                cull_noise_fine: m.get("cull_noise_fine").and_then(Value::as_f64),
+                noisy_twin: false,
+                noise_cost: 0.0,
+                subject_soft: false,
+                focus_on_background: false,
+                panning: false,
                 looking_down: m
                     .get("cull_looking_down")
                     .and_then(Value::as_bool)
@@ -658,6 +743,30 @@ fn rank_group_records(
 
     let group_has_faces = scored.iter().any(|s| s.cull_face_count > 0);
     let rk = &cfg.ranking;
+
+    // A frame clearly grainier than a sibling of the same frame-wide sharpness:
+    // the same picture at a higher ISO, whose grain every focus measure reads
+    // as detail. See `RankingConfig::noise_twin_ratio`.
+    let noisy: Vec<bool> = scored
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            rk.noise_twin_ratio > 0.0
+                && item.cull_noise_fine.is_some_and(|mine| {
+                    scored.iter().enumerate().any(|(j, other)| {
+                        j != i
+                            && (other.cull_sharpness - item.cull_sharpness).abs()
+                                <= rk.noise_twin_sharpness_delta
+                            && other
+                                .cull_noise_fine
+                                .is_some_and(|theirs| mine >= theirs * rk.noise_twin_ratio)
+                    })
+                })
+        })
+        .collect();
+    for (item, noisy) in scored.iter_mut().zip(&noisy) {
+        item.noisy_twin = *noisy;
+    }
 
     // The moment is the stronger of the genre axis and the emotion question,
     // not their mean: the goal celebration has no ball in it, and the shot on
@@ -787,15 +896,17 @@ fn rank_group_records(
                 .cull_eye_focus
                 .is_some_and(|v| v >= rk.reason_eye_focus_threshold)
     };
+    // A noisy twin's focus readings are its grain as much as its focus, so it
+    // does not set the bar its siblings are held to.
     let eye_focus_values: Vec<f64> = scored
         .iter()
-        .filter(|s| s.cull_face_count > 0)
+        .filter(|s| s.cull_face_count > 0 && !s.noisy_twin)
         .filter_map(|s| s.cull_eye_focus)
         .collect();
     let best_eye_focus = eye_focus_values.iter().cloned().reduce(f64::max);
     let best_face_focus = scored
         .iter()
-        .filter(|s| s.cull_face_count > 0)
+        .filter(|s| s.cull_face_count > 0 && !s.noisy_twin)
         .filter_map(|s| s.cull_face_focus)
         .reduce(f64::max);
     // In the score only when *every* frame with a face has a reading: a frame
@@ -807,6 +918,37 @@ fn rank_group_records(
             .filter(|s| s.cull_face_count > 0)
             .all(|s| s.cull_eye_focus.is_some());
     let focus_margin = rk.relative_focus_margin.max(0.0);
+
+    // The subject's focus is judged only when every frame went through the
+    // subject pass — all or nothing, like eye focus. A frame in which no
+    // subject was found, or too little of one to measure, abstains.
+    let subject_active = scored.iter().all(|s| s.subject_measured);
+    let best_subject = scored
+        .iter()
+        .filter(|s| subject_active && !s.noisy_twin)
+        .filter_map(|s| s.cull_subject_focus)
+        .reduce(f64::max);
+    let subject_margin = rk.relative_subject_margin.max(0.0);
+    // In focus: the subject reads sharp, absolutely and against the group's
+    // sharpest subject. Then a soft frame-wide reading is a shallow depth of
+    // field or a pan and not a blur defect — as sharp eyes already settle it
+    // for a face. A burst whose subject missed focus throughout has no frame
+    // that qualifies, so its blur rules stand.
+    let subject_in_focus = |item: &Scored| {
+        subject_active
+            && rk.reason_subject_focus_threshold > 0.0
+            && item.cull_subject_focus.is_some_and(|v| {
+                v >= rk.reason_subject_focus_threshold
+                    && best_subject.is_none_or(|b| v >= b - subject_margin)
+            })
+    };
+    // Clearly behind the group's sharpest subject: the focus missed it.
+    let subject_behind = |value: f64, threshold: f64| {
+        threshold > 0.0
+            && value < threshold
+            && group_size > 1
+            && best_subject.is_some_and(|b| value < b - subject_margin)
+    };
     // Clearly behind the group on focus: below `threshold`, with a sibling to
     // compare against, and — under the relative rules — behind the group's
     // best by the margin. A single never qualifies: with nothing sharper
@@ -874,6 +1016,12 @@ fn rank_group_records(
             unit(weighted / weight_sum.max(1e-6))
         };
 
+        if item.noisy_twin {
+            let before = item.cull_score;
+            item.cull_score = unit(item.cull_score - rk.noise_twin_penalty);
+            item.noise_cost = before - item.cull_score;
+        }
+
         // The moment, blended over whatever the quality signals concluded.
         //
         // A convex blend rather than another weighted term, because it answers
@@ -890,6 +1038,9 @@ fn rank_group_records(
         if let Some(moment) = item.moment {
             let w = rk.semantic_weight.clamp(0.0, 1.0);
             item.cull_score = unit((1.0 - w) * item.cull_score + w * moment);
+            // Both terms are in 0..1, so the blend never clamps and scales
+            // the penalty by exactly its weight.
+            item.noise_cost *= 1.0 - w;
         }
 
         // Defects no edit can repair, at the thresholds the reject rules have
@@ -925,6 +1076,7 @@ fn rank_group_records(
         // focus: on a shoot, ten frames of a child behind birthday candles all
         // read "blurred" with sharp eyes and lost the group its pick.
         let blur_defect = !eyes_in_focus(item)
+            && !subject_in_focus(item)
             && item.sharpness_effective < rk.reason_blur_threshold
             && (!relative
                 || !rk.relative_blur_rule
@@ -973,7 +1125,35 @@ fn rank_group_records(
             eye_focus.is_some_and(|v| behind(v, rk.reason_eye_focus_threshold, best_eye_focus));
         item.face_soft =
             face_focus.is_some_and(|v| behind(v, rk.reason_face_focus_threshold, best_face_focus));
+        // Focus that landed beside the subject, judged like eye focus: a label
+        // below the reason threshold, a defect below the reject one, both only
+        // against a sharper sibling. Where the eyes were measured sharp the
+        // face has settled it.
+        let subject_focus = item
+            .cull_subject_focus
+            .filter(|_| subject_active && !eyes_in_focus(item));
+        let subject_defect =
+            subject_focus.is_some_and(|v| subject_behind(v, rk.reject_subject_focus_threshold));
+        item.subject_soft =
+            subject_focus.is_some_and(|v| subject_behind(v, rk.reason_subject_focus_threshold));
+        item.focus_on_background = item.subject_soft
+            && match (item.cull_subject_focus, item.cull_background_focus) {
+                (Some(subject), Some(background)) => {
+                    background >= subject + rk.reason_background_sharper_margin
+                }
+                _ => false,
+            };
+        item.panning = rk.reason_panning_streak > 0.0
+            && subject_in_focus(item)
+            && item
+                .cull_background_streak
+                .is_some_and(|streak| streak >= rk.reason_panning_streak)
+            && match (item.cull_subject_focus, item.cull_background_focus) {
+                (Some(subject), Some(background)) => background < subject,
+                _ => false,
+            };
         item.hard_defect = blur_defect
+            || subject_defect
             || (group_has_faces
                 && item.cull_face_count > 0
                 && (blink_defect || occlusion_defect || eye_focus_defect || face_focus_defect));
@@ -1046,8 +1226,9 @@ fn rank_group_records(
             if intentional_set.is_some() {
                 return false;
             }
-            let is_soft =
-                item.sharpness_effective < rk.reason_blur_threshold && !eyes_in_focus(item);
+            let is_soft = item.sharpness_effective < rk.reason_blur_threshold
+                && !eyes_in_focus(item)
+                && !subject_in_focus(item);
             if i == 0 {
                 // Nothing better to compare with: a single, or the best of its
                 // group. Only blur counts here; see
@@ -1055,7 +1236,12 @@ fn rank_group_records(
                 // exposure and the blink proxy do not.
                 return rk.reject_blurred_without_alternative && is_soft;
             }
-            item.cull_score <= (winner_score - rk.reject_score_delta).max(0.0)
+            // Grain against a twin decides the order, never a deletion on its
+            // own: the grainier frame is the same picture, and noise reduction
+            // takes most of it back. On the public benchmark the penalty alone
+            // pushed pans past this line, whose streaked background keeps more
+            // grain than a twin blurred all round.
+            item.cull_score + item.noise_cost <= (winner_score - rk.reject_score_delta).max(0.0)
                 || item.hard_defect
                 || item.cull_exposure < rk.reject_exposure_threshold
                 || item.weak_face
@@ -1086,6 +1272,31 @@ fn rank_group_records(
                     "blurred".to_string()
                 },
             );
+        }
+        if item.focus_on_background {
+            reason_codes.push("focus_on_background".to_string());
+        } else if item.subject_soft {
+            reason_codes.push("subject_out_of_focus".to_string());
+        }
+        if item.panning {
+            reason_codes.push("panning".to_string());
+        }
+        if item.noisy_twin {
+            reason_codes.push("noisier_than_sibling".to_string());
+        }
+        if is_winner
+            && scored.len() > 1
+            && subject_active
+            && item
+                .cull_subject_focus
+                .is_some_and(|v| best_subject.is_some_and(|b| v >= b - rk.reason_sharpest_delta))
+            && scored
+                .iter()
+                .filter(|s| s.cull_subject_focus.is_some())
+                .count()
+                > 1
+        {
+            reason_codes.push("subject_sharpest_in_group".to_string());
         }
         // Named on its own, whatever the exposure term says: a frame can sit
         // nearer mid-grey than its sibling and still have lost its highlights.
@@ -1246,6 +1457,7 @@ fn rank_group_records(
                 } else if let Some(axis) = rk.semantic_prompt_set {
                     reason_codes.push(match axis {
                         "action" => "peak_action".to_string(),
+                        "wildlife" => "peak_behaviour".to_string(),
                         "expression" => "best_expression".to_string(),
                         "candid" => "strongest_moment".to_string(),
                         other => format!("strongest_{other}"),
@@ -1375,6 +1587,16 @@ fn rank_group_records(
                 if let Some(v) = value {
                     metrics.insert(key.into(), Value::from(round4(v)));
                 }
+            }
+        }
+        for (key, value) in [
+            ("noise_fine", item.cull_noise_fine),
+            ("subject_focus", item.cull_subject_focus),
+            ("background_focus", item.cull_background_focus),
+            ("background_streak", item.cull_background_streak),
+        ] {
+            if let Some(v) = value {
+                metrics.insert(key.into(), Value::from(round4(v)));
             }
         }
         metrics.insert("clear_defect".into(), Value::from(item.hard_defect));
@@ -1891,6 +2113,154 @@ mod tests {
         groups[0].winner_photo_id.clone().expect("group has a pick")
     }
 
+    /// A frame with the subject pass's readings: frame-wide sharpness, focus on
+    /// the subject and on the background.
+    fn subject_frame(
+        id: &str,
+        t: f64,
+        sharpness: f64,
+        subject: f64,
+        background: f64,
+    ) -> GroupingInput {
+        let mut r = with_metrics(
+            rec(id, Some(t), Some(0xffff_ffff_ffff_ffff)),
+            &[
+                ("cull_sharpness", sharpness),
+                ("cull_sharpness_peak", sharpness),
+                ("cull_exposure", 0.7),
+                ("cull_noise", 0.1),
+                ("cull_subject_focus", subject),
+                ("cull_background_focus", background),
+                ("cull_background_streak", 0.02),
+            ],
+        );
+        r.metadata
+            .insert(SUBJECT_VERSION_KEY.into(), Value::from(SUBJECT_VERSION));
+        r
+    }
+
+    /// A shallow depth of field: the frame reads soft, the subject sharp. The
+    /// subject settles it — not blurred, not a reject — where the frame-wide
+    /// reading alone made it a blur defect against its busier sibling.
+    #[test]
+    fn a_sharp_subject_on_a_soft_background_is_not_blurred() {
+        let burst = vec![
+            subject_frame("deep", 1000.0, 0.35, 0.62, 0.6),
+            subject_frame("shallow", 1000.4, 0.08, 0.63, 0.25),
+        ];
+        let groups = run(burst.clone());
+        let shallow = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "shallow")
+            .unwrap();
+        assert!(!shallow.reject_candidate, "{:?}", shallow.reason_codes);
+        assert!(
+            !shallow.reason_codes.iter().any(|c| c == "blurred"),
+            "{:?}",
+            shallow.reason_codes
+        );
+
+        // Without the subject pass the same pair is a blur defect.
+        let bare: Vec<GroupingInput> = burst
+            .into_iter()
+            .map(|mut r| {
+                r.metadata.remove(SUBJECT_VERSION_KEY);
+                r
+            })
+            .collect();
+        let groups = run(bare);
+        let shallow = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "shallow")
+            .unwrap();
+        assert!(shallow.reject_candidate, "documenting the fault it fixes");
+    }
+
+    /// Focus behind the subject: the frame reads as sharp as its sibling, but
+    /// its subject is soft and its background sharp. Named and rejected.
+    #[test]
+    fn focus_behind_the_subject_is_named_and_rejected() {
+        let groups = run(vec![
+            subject_frame("on_subject", 1000.0, 0.30, 0.62, 0.40),
+            subject_frame("behind", 1000.4, 0.31, 0.30, 0.65),
+        ]);
+        assert_eq!(winner_of(&groups), "on_subject");
+        let behind = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "behind")
+            .unwrap();
+        assert!(behind.reject_candidate, "{:?}", behind.reason_codes);
+        assert!(
+            behind
+                .reason_codes
+                .iter()
+                .any(|c| c == "focus_on_background"),
+            "{:?}",
+            behind.reason_codes
+        );
+    }
+
+    /// The same picture at a higher ISO: grain lifts its eye focus above the
+    /// clean frame's. It loses, is named, and the clean frame is not called
+    /// out of focus beside it.
+    #[test]
+    fn a_noisy_twin_loses_and_does_not_set_the_bar() {
+        let frame = |id: &str, t: f64, eye: f64, grain: f64| {
+            let mut r = with_metrics(
+                rec(id, Some(t), Some(0xffff_ffff_ffff_ffff)),
+                &[
+                    ("cull_sharpness", 0.30),
+                    ("cull_sharpness_peak", 0.5),
+                    ("cull_exposure", 0.7),
+                    ("cull_noise", 0.1),
+                    ("cull_face_score", 0.6),
+                    ("cull_face_sharpness", 0.5),
+                    ("cull_eye_openness", 0.9),
+                    ("cull_blink_penalty", 0.1),
+                    ("cull_eye_focus", eye),
+                    ("cull_noise_fine", grain),
+                ],
+            );
+            r.metadata.insert("cull_face_count".into(), Value::from(1));
+            r.metadata
+                .insert(FOCUS_VERSION_KEY.into(), Value::from(FOCUS_VERSION));
+            r
+        };
+        let groups = run(vec![
+            frame("clean", 1000.0, 0.50, 0.004),
+            frame("grainy", 1000.4, 0.62, 0.020),
+        ]);
+        assert_eq!(winner_of(&groups), "clean");
+        let clean = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "clean")
+            .unwrap();
+        assert!(
+            !clean.reason_codes.iter().any(|c| c == "eyes_out_of_focus"),
+            "{:?}",
+            clean.reason_codes
+        );
+        let grainy = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "grainy")
+            .unwrap();
+        assert!(
+            grainy
+                .reason_codes
+                .iter()
+                .any(|c| c == "noisier_than_sibling"),
+            "{:?}",
+            grainy.reason_codes
+        );
+        // Below its twin, but not deleted for the grain alone.
+        assert!(!grainy.reject_candidate, "{:?}", grainy.reason_codes);
+    }
+
     /// The shallow-depth-of-field case. `shallow` has a razor-sharp subject on
     /// smooth bokeh: low frame-wide variance, high peak. `busy` is soft
     /// everywhere over detailed foliage: higher frame-wide variance, no peak.
@@ -2333,7 +2703,7 @@ mod tests {
         // `quality` always applies and is not selectable, and `organism` gates
         // the species task rather than grading anything, so a preset naming
         // either would be a bug and this test is what catches it.
-        const KNOWN: [&str; 3] = ["action", "expression", "candid"];
+        const KNOWN: [&str; 4] = ["action", "expression", "candid", "wildlife"];
         let mut with_axis = 0;
         for preset in crate::culling_config::available_presets() {
             let rk = get_culling_config(preset).ranking;

@@ -12,6 +12,7 @@ use crate::bioclip::BioclipModelPaths;
 use crate::face_state::FaceStatePaths;
 use crate::faces::FaceModelPaths;
 use crate::siglip::ModelPaths;
+use crate::subject::SubjectPaths;
 
 fn default_models_dir() -> PathBuf {
     dirs_next_home()
@@ -167,6 +168,19 @@ pub fn resolve_face_state() -> FaceStatePaths {
         blendshapes_onnx: env_or_default(
             "LRG_FACE_BLENDSHAPES_ONNX",
             dir.join("face_blendshapes_v2.onnx"),
+        ),
+    }
+}
+
+/// RF-DETR-Seg Nano, which finds a photo's subject for culling, as
+/// `scripts/export_subject_rfdetr.py` exports it and `/v1/models/assets/downloads`
+/// fetches it (`subject-assets-v1`). Same directory and env-var convention as
+/// the other families (`LRG_SUBJECT_ONNX`).
+pub fn resolve_subject() -> SubjectPaths {
+    SubjectPaths {
+        onnx: env_or_default(
+            "LRG_SUBJECT_ONNX",
+            default_models_dir().join("subject_rfdetr_seg_nano.onnx"),
         ),
     }
 }

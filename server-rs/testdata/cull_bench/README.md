@@ -28,6 +28,15 @@ turned to the camera with the eyes at least 45 px apart, a subject defect a
 subject mask covering 1.5–65 % of the frame, a pan a subject in sport or
 wildlife.
 
+The subject is the people of a photograph (those at least a quarter the size of
+the largest), the animals in wildlife, and in sport the athletes together with
+what carries them: a horse, a bicycle or a car whose mask touches theirs at
+least a quarter the athlete's size. Blurring around the rider alone made the
+horse "background", which no photographer would call it. A photograph with a
+person left out of the subject who is as large as one in it (the detector less
+sure of them) carries no subject defect at all: blurring them is focus on one
+of two people, not a shallow depth of field.
+
 | `defect` | What was done (at 3000 px on the long edge) | Label |
 |---|---|---|
 | `original` | nothing | rank 1; must not be called blurred or out of focus |
@@ -70,6 +79,8 @@ uv run python cull_bench.py run --url http://127.0.0.1:19830
 
 `run --reindex` measures every frame again, after a change to what indexing
 stores; without it, frames the backend already has are only graded again.
+`make --force --genres sport` makes one genre's frames again, after a change to
+how its defects are placed; the others are kept.
 The subject masks and eye positions that place the defects come from
 torchvision's Mask R-CNN and Keypoint R-CNN, never from the models the backend
 ships, so the benchmark does not grade a model by its agreement with itself.

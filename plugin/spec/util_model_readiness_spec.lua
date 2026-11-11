@@ -25,6 +25,7 @@ local function families(unready)
 			ready = not notReady.face_state,
 			approx_bytes = 6800000,
 		},
+		{ id = "subject", name = "Subject detection", ready = not notReady.subject, approx_bytes = 122900000 },
 	}
 end
 
@@ -35,13 +36,13 @@ describe("Util.requiredModelFamilies", function()
 		assert.are.same({ "bioclip" }, Util.requiredModelFamilies({ "species" }))
 	end)
 
-	it("requires the face, face state and scoring models for a cull run", function()
+	it("requires the face, face state, scoring and subject models for a cull run", function()
 		-- The fast cull ingest still scores face quality, which is the whole
 		-- point of face-aware ranking, reads eye state from the face state
-		-- model, and scores each photo's aesthetic. Missing any of them does
-		-- not fail the run, it just quietly makes the picks worse — exactly
-		-- what the gate is for.
-		assert.are.same({ "aesthetic", "face", "face_state" }, Util.requiredModelFamilies({ "cull" }))
+		-- model, scores each photo's aesthetic and finds its subject to
+		-- measure focus on. Missing any of them does not fail the run, it just
+		-- quietly makes the picks worse — exactly what the gate is for.
+		assert.are.same({ "aesthetic", "face", "face_state", "subject" }, Util.requiredModelFamilies({ "cull" }))
 	end)
 
 	it("requires nothing on-device for an LLM-only run", function()
@@ -55,7 +56,10 @@ describe("Util.requiredModelFamilies", function()
 	end)
 
 	it("does not list a family twice when two tasks need it", function()
-		assert.are.same({ "aesthetic", "face", "face_state" }, Util.requiredModelFamilies({ "faces", "cull" }))
+		assert.are.same(
+			{ "aesthetic", "face", "face_state", "subject" },
+			Util.requiredModelFamilies({ "faces", "cull" })
+		)
 	end)
 
 	it("tolerates missing or malformed input", function()

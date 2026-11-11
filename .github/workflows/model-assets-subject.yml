@@ -1,0 +1,89 @@
+name: Export Subject Model Assets
+
+# RF-DETR-Seg Nano (~123 MB) for the backend's subject detection
+# (server-rs/crates/lrg-ml/src/subject.rs), which culling uses to measure focus
+# on the subject and on the background. Same reasoning as the other model
+# jobs: the upstream model does not change per app release, so this publishes
+# to a stable tag that only moves when the export changes.
+#
+# The checkpoint comes from rfdetr (pinned in the script's PEP 723 header),
+# pinned again by SHA-256 in the export script. The rfdetr README states that
+# RF-DETR-Seg, every size, is Apache 2.0. The script compares the export with
+# the PyTorch model on the reference portrait before anything is written.
+#
+# Its **own** tag, like the face-state family: without the subject model
+# culling judges sharpness frame-wide, and no other family may report "not
+# ready" because of it. If the export changes in a way older binaries cannot
+# read, bump both this workflow's `tag_name` and `SUBJECT_ASSETS_RELEASE_TAG`
+# in routes/assets.rs together. That is a different question from
+# `lrg_ml::subject::MODEL_ID` and `SUBJECT_VERSION`, which mark stored readings
+# as no longer comparable.
+#
+# macos-latest for the same reason as the other model jobs: ubuntu-latest
+# intermittently segfaulted during ONNX Runtime verification.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'server-rs/scripts/export_subject_rfdetr.py'
+      - '.github/workflows/model-assets-subject.yml'
+
+# Publishes to a FIXED release tag with overwrite_files: true, so two runs are
+# delete-then-upload racing each other. Never cancelled: cancelling
+# mid-upload is the one thing that could truncate a published asset.
+concurrency:
+  group: model-assets-subject
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  export-subject-assets:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    name: Export RF-DETR-Seg Nano
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+
+      # --no-project: the script carries its own PEP 723 dependencies (rfdetr
+      # with its torch and transformers pins), which do not belong in the
+      # shared server-rs/scripts export project.
+      - name: Export the subject model
+        run: |
+          set -euo pipefail
+          uv run --no-project --python 3.12 server-rs/scripts/export_subject_rfdetr.py \
+            --output-dir subject-assets
+          echo "=== Exported subject assets ==="
+          ls -lh subject-assets/
+
+      - name: Publish to the stable subject-assets release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: subject-assets-v1
+          name: Subject model assets (RF-DETR-Seg Nano)
+          body: |
+            ONNX asset for the backend's subject detection, fetched by
+            `POST /v1/models/assets/downloads`.
+
+            - `subject_rfdetr_seg_nano.onnx` — RF-DETR-Seg Nano (Roboflow),
+              COCO objects with masks from a 312 px square, Apache-2.0
+
+            See `server-rs/scripts/export_subject_rfdetr.py` and
+            `.github/workflows/model-assets-subject.yml`.
+          files: subject-assets/*
+          draft: false
+          prerelease: false
+          make_latest: false
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

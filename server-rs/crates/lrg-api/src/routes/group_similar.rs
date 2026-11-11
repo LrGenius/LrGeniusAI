@@ -375,6 +375,12 @@ struct GroupingOutcome {
     state_unmeasured: usize,
     /// Whether that model is on disk, which decides the fix the warning names.
     face_state_model_ready: bool,
+    /// Ranked photos that did not go through the current subject pass, when
+    /// the preset judges focus on the subject. Their group is ranked on
+    /// frame-wide sharpness, as before the pass existed.
+    subject_unmeasured: usize,
+    /// Whether the subject model is on disk, which decides the fix.
+    subject_model_ready: bool,
     /// CLIP-IQA signals the run asked for and had to do without, because
     /// their prompt vectors were neither stored nor obtainable from the text
     /// tower.
@@ -516,6 +522,8 @@ async fn compute_groups(
             focus_unmeasured: 0,
             state_unmeasured: 0,
             face_state_model_ready: state.face_state.is_cached(),
+            subject_unmeasured: 0,
+            subject_model_ready: state.subject.is_cached(),
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),
@@ -669,6 +677,20 @@ async fn compute_groups(
         })
         .count();
 
+    // Only when the preset reads the subject at all; counted whether or not
+    // the model is there, since the fix differs and both are said.
+    let judges_subject = cfg.ranking.subject_focus_weight > 0.0
+        || cfg.ranking.reason_subject_focus_threshold > 0.0
+        || cfg.ranking.reject_subject_focus_threshold > 0.0;
+    let subject_unmeasured = if judges_subject {
+        records
+            .iter()
+            .filter(|r| !lrg_analysis::grouping::subject_is_current(&r.metadata))
+            .count()
+    } else {
+        0
+    };
+
     // Captured after the IQA passes and before grouping consumes the records,
     // so it reflects exactly the inputs this run ranked on — including the
     // injected `cull_*_iqa` scores, which are not stored
@@ -717,6 +739,8 @@ async fn compute_groups(
         focus_unmeasured,
         state_unmeasured,
         face_state_model_ready: state.face_state.is_cached(),
+        subject_unmeasured,
+        subject_model_ready: state.subject.is_cached(),
         unavailable,
     })
 }
@@ -812,6 +836,25 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
              Similar Photos' and 'Prepare now'.",
             outcome.state_unmeasured
         ));
+    }
+    if outcome.subject_unmeasured > 0 {
+        warnings.push(if outcome.subject_model_ready {
+            format!(
+                "{} photo(s) were prepared before their subject was found, so they and the \
+                 photos grouped with them were judged on frame-wide sharpness, which can take \
+                 focus on the background for a sharp photo. Run 'Cull Similar Photos' again \
+                 and choose 'Prepare now' to measure focus on the subject.",
+                outcome.subject_unmeasured
+            )
+        } else {
+            format!(
+                "Focus on the subject was not measured for {} photo(s) because the subject \
+                 model is not downloaded yet, so sharpness was judged on the whole frame. Run \
+                 \"Download AI models\" in Plug-in Manager, then 'Cull Similar Photos' and \
+                 'Prepare now'.",
+                outcome.subject_unmeasured
+            )
+        });
     }
     if outcome.embedded_count == 0 {
         warnings.push(if outcome.moment_asked {
@@ -992,6 +1035,8 @@ mod tests {
             focus_unmeasured: 0,
             state_unmeasured: 0,
             face_state_model_ready: true,
+            subject_unmeasured: 0,
+            subject_model_ready: true,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),
@@ -1012,6 +1057,21 @@ mod tests {
         let mut o = outcome(0, 0);
         o.focus_unmeasured = 2;
         assert_eq!(grouping_warnings(&o).len(), 2);
+    }
+
+    /// Photos prepared before the subject pass are ranked on frame-wide
+    /// sharpness; the fix is preparing them, or first downloading the model.
+    #[test]
+    fn photos_without_a_subject_reading_are_named_with_the_fix() {
+        let mut o = outcome(10, 0);
+        o.subject_unmeasured = 4;
+        let warnings = grouping_warnings(&o);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].starts_with("4 photo(s) were prepared before their subject"));
+        assert!(warnings[0].contains("Prepare now"));
+        o.subject_model_ready = false;
+        let warnings = grouping_warnings(&o);
+        assert!(warnings[0].contains("Download AI models"), "{warnings:?}");
     }
 
     /// Old preparation and a missing model are two problems with two fixes;

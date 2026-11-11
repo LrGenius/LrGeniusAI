@@ -103,6 +103,10 @@ local function showCullDialog(ctx)
 							title = "Sports (action and emotion)",
 							value = "sports",
 						},
+						{
+							title = "Wildlife (animals, the subject sharp)",
+							value = "wildlife",
+						},
 					},
 					width = 260,
 				}),

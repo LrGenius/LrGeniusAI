@@ -19,7 +19,7 @@ use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsIn
 use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
 use lrg_imaging::cull_config::{FaceMetricsConfig, ImageMetricsConfig};
 use lrg_imaging::location::LocationTags;
-use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
+use lrg_imaging::metrics::{culling_metrics, fine_noise, perceptual_hash, RgbImage};
 use lrg_ml::faces::FacePass;
 use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{KeywordCategories, KeywordTree, ReasoningEffort};
@@ -40,6 +40,9 @@ pub(crate) struct ParsedOptions {
     /// asking for it separately.
     compute_aesthetic: bool,
     compute_faces: bool,
+    /// Find the photo's subject (RF-DETR-Seg) and measure focus on it and on
+    /// the background. Set by the `cull` task and by `subject` alone.
+    compute_subject: bool,
     /// How much of the face pipeline to run. The `cull` task only reads the
     /// quality proxies, so it skips FaceNet and the thumbnail encode.
     face_pass: FacePass,
@@ -393,6 +396,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         compute_embeddings: has_task("embeddings"),
         compute_aesthetic: has_task("aesthetic") || has_task("embeddings") || cull_pass,
         compute_faces: has_task("faces") || cull_pass,
+        compute_subject: has_task("subject") || cull_pass,
         face_pass: if has_task("faces") {
             FacePass::Full
         } else {
@@ -978,6 +982,17 @@ pub(crate) async fn process_batch(
                 .to_string(),
         );
     }
+    // Without the subject finder culling judges sharpness on the whole frame,
+    // which cannot tell focus on the background from a shallow depth of field.
+    if options.compute_subject && !state.subject.is_cached() {
+        warnings.push(
+            "Photos were prepared without subject detection: the subject model is not \
+             downloaded yet, so culling judges sharpness on the whole frame and can mistake \
+             focus on the background for a sharp photo. Run \"Download AI models\" in \
+             Plug-in Manager and prepare them again."
+                .to_string(),
+        );
+    }
     if options.compute_aesthetic && !state.aesthetic.is_cached() {
         warnings.push(
             "Photos were indexed without an aesthetic score: the photo quality model is not \
@@ -1325,6 +1340,9 @@ struct PreparedPhoto {
 /// The per-photo culling signals, computed once per batch off the hot path.
 pub(crate) struct CullSignals {
     metrics: lrg_imaging::metrics::CullingMetrics,
+    /// Grain at the working copy's resolution (`cull_noise_fine`), which the
+    /// 512 px metrics average away.
+    noise_fine: Option<f64>,
     phash: String,
     /// The photo's preview for the browser search page, made from the same
     /// decode (see `crate::thumbnails`). An encoding failure is carried, not
@@ -1376,6 +1394,7 @@ fn precompute_cull_signals(images: &[Arc<[u8]>]) -> Vec<Result<CullSignals, Stri
             };
             Ok(CullSignals {
                 metrics: culling_metrics(&rgb, &cfg),
+                noise_fine: fine_noise(&rgb, &cfg),
                 phash: perceptual_hash(&rgb),
                 thumbnail: lrg_imaging::convert::thumbnail_jpeg(
                     &pixels,
@@ -1479,7 +1498,10 @@ async fn prepare_one(
     // reasons left to decode here are the SigLIP2 embedding and the aesthetic
     // score. A cull-only run
     // therefore never decodes in this function at all.
-    let decoded_for_embedding = if options.compute_embeddings || options.compute_aesthetic {
+    let decoded_for_embedding = if options.compute_embeddings
+        || options.compute_aesthetic
+        || (options.compute_subject && state.subject.is_cached())
+    {
         let decoded = image::load_from_memory(image_bytes)
             .map_err(|e| format!("could not decode image: {e}"))?
             .to_rgb8();
@@ -1552,6 +1574,7 @@ async fn prepare_one(
     // requires a re-index.
     let CullSignals {
         metrics,
+        noise_fine,
         phash,
         thumbnail,
     } = cull;
@@ -1596,6 +1619,16 @@ async fn prepare_one(
     // `cull_noise`, whose high-pass residual reads detail as grain; rows
     // without it rank on the frame-wide number until re-indexed.
     main_metadata.insert("cull_noise_flat".into(), json!(metrics.cull_noise_flat));
+    // Grain at full working size, which tells a noisy twin from its clean
+    // sibling; absent when too little of the frame is flat to measure.
+    match noise_fine {
+        Some(v) => main_metadata.insert("cull_noise_fine".into(), json!(v)),
+        None => main_metadata.remove("cull_noise_fine"),
+    };
+    main_metadata.insert(
+        "cull_metrics_version".into(),
+        json!(lrg_imaging::metrics::METRICS_VERSION),
+    );
     if !phash.is_empty() {
         main_metadata.insert("cull_phash".into(), json!(phash));
         main_metadata.insert("phash".into(), json!(phash));
@@ -1684,6 +1717,46 @@ async fn prepare_one(
                          decoded pixels"
                     )),
                 }
+            }
+        }
+    }
+
+    // The subject, and focus on it and on the background: what tells a frame
+    // whose focus missed its subject from a shallow depth of field or a pan.
+    // Measured on the working copy, which is plenty for a subject; the
+    // full-size original is only decoded for the eyes. Skipped when this
+    // photo already carries a reading from this version and model.
+    if options.compute_subject && state.subject.is_cached() {
+        let current = lrg_analysis::grouping::subject_is_current(&main_metadata)
+            && main_metadata
+                .get(SUBJECT_MODEL_FIELD)
+                .and_then(Value::as_str)
+                == Some(lrg_ml::subject::MODEL_ID);
+        if options.regenerate_metadata || !current {
+            match decoded_for_embedding.as_ref() {
+                Some((pixels, width, height)) => {
+                    let t0 = Instant::now();
+                    match measure_subject(state, pixels, *width, *height) {
+                        Ok(reading) => {
+                            log::debug!(
+                                "Photo {photo_id}: subject {} took {:?}",
+                                reading.subject.as_ref().map_or("none", |s| s.kind.as_str()),
+                                t0.elapsed()
+                            );
+                            apply_subject(&mut main_metadata, &reading);
+                        }
+                        Err(e) => {
+                            log::warn!("Subject detection failed for {photo_id}: {e}");
+                            warnings.push(format!(
+                                "{filename}: focus on the subject could not be measured — {e}"
+                            ));
+                        }
+                    }
+                }
+                None => warnings.push(format!(
+                    "{filename}: focus on the subject could not be measured — internal: \
+                     requested without decoded pixels"
+                )),
             }
         }
     }
@@ -1813,6 +1886,119 @@ async fn prepare_one(
         thumbnail,
         full_source: None,
     })
+}
+
+/// Which model measured a photo's subject, stored next to
+/// [`lrg_analysis::grouping::SUBJECT_VERSION_KEY`].
+const SUBJECT_MODEL_FIELD: &str = "cull_subject_model";
+
+/// Every field the subject pass writes, so a pass that finds no subject this
+/// time leaves none of an earlier pass's behind.
+const SUBJECT_FIELDS: &[&str] = &[
+    lrg_analysis::grouping::SUBJECT_VERSION_KEY,
+    SUBJECT_MODEL_FIELD,
+    "cull_subject_kind",
+    "cull_subject_score",
+    "cull_subject_area",
+    "cull_subject_x",
+    "cull_subject_y",
+    "cull_subject_focus",
+    "cull_background_focus",
+    "cull_background_streak",
+    SUBJECT_MASK_FIELD,
+];
+
+/// The subject's mask, coarse (`lrg_imaging::subject_focus::STORED_GRID`), so
+/// the face pass can tell the faces of the subject from the bystanders'.
+const SUBJECT_MASK_FIELD: &str = "cull_subject_mask";
+
+/// The subject version the face aggregates were taken against. A face pass
+/// that ran before the subject was measured counted every face, so a photo
+/// whose subject reading is newer than its aggregates is measured again.
+pub(super) const FACE_SUBJECT_KEY: &str = "cull_face_subject_version";
+
+/// Every face the pass found, bystanders included, next to `cull_face_count`,
+/// which counts only the faces culling judges (see [`subject_faces`]).
+const FACES_DETECTED_FIELD: &str = "cull_faces_detected";
+
+/// The faces found in a photo, bystanders included: what decides whether the
+/// face pass has readings to bring up to date, for People as much as for
+/// culling. A photo indexed before the two counts differed has only
+/// `cull_face_count`, which then still counted every face.
+pub(super) fn faces_detected(metadata: &Map<String, Value>) -> i64 {
+    metadata
+        .get(FACES_DETECTED_FIELD)
+        .or_else(|| metadata.get("cull_face_count"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+}
+
+/// What the subject pass found in one photo.
+struct SubjectReading {
+    subject: Option<lrg_imaging::subject_focus::Subject>,
+    focus: lrg_imaging::subject_focus::SubjectFocus,
+}
+
+/// Finds the subject of an RGB8 working copy and measures focus on it.
+fn measure_subject(
+    state: &AppState,
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+) -> Result<SubjectReading, String> {
+    use lrg_imaging::subject_focus::{choose_subject, measure, ObjectMask};
+    let detections = state
+        .subject
+        .detect(pixels, width, height)
+        .map_err(|e| e.to_string())?;
+    let objects: Vec<ObjectMask<'_>> = detections
+        .iter()
+        .map(|d| ObjectMask {
+            kind: d.kind.as_str(),
+            score: d.score,
+            grid: lrg_ml::subject::MASK_SIZE,
+            mask: &d.mask,
+        })
+        .collect();
+    let subject = choose_subject(&objects);
+    let focus = subject
+        .as_ref()
+        .map(|s| measure(pixels, width, height, s))
+        .unwrap_or_default();
+    Ok(SubjectReading { subject, focus })
+}
+
+/// Writes a subject reading onto the photo, replacing any earlier one. The
+/// version is written whatever was found: "no subject" is an answer too.
+fn apply_subject(metadata: &mut Map<String, Value>, reading: &SubjectReading) {
+    for key in SUBJECT_FIELDS {
+        metadata.remove(*key);
+    }
+    let round = |v: f64| (v * 10_000.0).round() / 10_000.0;
+    metadata.insert(
+        lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+        json!(lrg_analysis::grouping::SUBJECT_VERSION),
+    );
+    metadata.insert(SUBJECT_MODEL_FIELD.into(), json!(lrg_ml::subject::MODEL_ID));
+    let Some(subject) = &reading.subject else {
+        return;
+    };
+    metadata.insert("cull_subject_kind".into(), json!(subject.kind));
+    metadata.insert("cull_subject_score".into(), json!(round(subject.score)));
+    metadata.insert("cull_subject_area".into(), json!(round(subject.area)));
+    metadata.insert("cull_subject_x".into(), json!(round(subject.center.0)));
+    metadata.insert("cull_subject_y".into(), json!(round(subject.center.1)));
+    metadata.insert(SUBJECT_MASK_FIELD.into(), json!(subject.stored_mask()));
+    let focus = &reading.focus;
+    for (key, value) in [
+        ("cull_subject_focus", focus.subject),
+        ("cull_background_focus", focus.background),
+        ("cull_background_streak", focus.background_streak),
+    ] {
+        if let Some(v) = value {
+            metadata.insert(key.into(), json!(round(v)));
+        }
+    }
 }
 
 /// The species block of a photo's metadata, in the shape the prompt wants.
@@ -2033,17 +2219,24 @@ async fn finish_one(
         // The same for the face state, once its model is on disk: a photo
         // prepared before it was downloaded is analysed on the next pass. A full
         // pass only when the photo has faces, since it re-runs identity for them.
-        let has_faces = main_metadata
-            .get("cull_face_count")
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-            > 0;
+        let has_faces = faces_detected(&main_metadata) > 0;
         let rows_behind =
             options.face_pass == FacePass::Full && main_metadata.contains_key(FACE_ROWS_BEHIND_KEY);
         let state_missing = (options.face_pass == FacePass::QualityOnly || has_faces)
             && state.face_state.is_cached()
             && (rows_behind || !lrg_analysis::grouping::face_state_is_current(&main_metadata));
-        if options.regenerate_metadata || !already_checked || focus_missing || state_missing {
+        // And for a subject measured after the faces were: until the faces are
+        // aggregated again, a bystander behind the subject still counts.
+        let subject_unapplied = has_faces
+            && lrg_analysis::grouping::subject_is_current(&main_metadata)
+            && main_metadata.get(FACE_SUBJECT_KEY)
+                != main_metadata.get(lrg_analysis::grouping::SUBJECT_VERSION_KEY);
+        if options.regenerate_metadata
+            || !already_checked
+            || focus_missing
+            || state_missing
+            || subject_unapplied
+        {
             // Decoded here rather than carried from phase 1: full RGB is by far
             // the largest per-photo allocation, and holding one per photo in
             // flight is how a bigger group would turn into a memory problem.
@@ -2146,32 +2339,6 @@ async fn finish_one(
                 // `faces_checked` unset, so `/v1/index/unprocessed` still
                 // reports the photo as needing a real face pass later.
                 Ok((faces, _)) if options.face_pass == FacePass::QualityOnly => {
-                    let inputs: Vec<FaceMetricsInput> = faces
-                        .iter()
-                        .map(|f| FaceMetricsInput {
-                            sharpness: f.sharpness,
-                            area_ratio: f.area_ratio,
-                            det_score: f.det_score,
-                            center_proximity: f.center_proximity,
-                            eye_openness: f.eye_openness,
-                            blink_penalty: f.blink_penalty,
-                            occlusion: Some(f.occlusion),
-                            eye_focus: f.eye_focus,
-                            face_focus: f.face_focus,
-                            eye_closed: judged(f)
-                                .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Down)
-                                .map(|s| s.eye_closed),
-                            looking_down: judged(f)
-                                .is_some_and(|s| s.eye_state == lrg_ml::face_state::EyeState::Down),
-                            smile: judged(f).map(|s| s.smile),
-                            eye_squint: judged(f).map(|s| s.eye_squint),
-                            gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
-                            mouth_open: judged(f).map(|s| s.mouth_open),
-                            luminance: judged_light(f).map(|l| l.luminance),
-                            across_face_stops: judged_light(f).and_then(|l| l.across_face_stops),
-                            blown: judged_light(f).map(|l| l.blown),
-                        })
-                        .collect();
                     // Before the readings are stamped as current: a photo whose rows
                     // could not be saved must be asked for again, or People could
                     // never read it.
@@ -2199,7 +2366,7 @@ async fn finish_one(
                             }
                         }
                     }
-                    apply_face_aggregate(&mut main_metadata, &inputs, stamped);
+                    apply_face_aggregate(&mut main_metadata, &faces, working_dims, stamped);
                     log::debug!(
                         "Photo {photo_id}: cull pass scored {} face(s), no identity written.",
                         faces.len()
@@ -2322,38 +2489,10 @@ async fn finish_one(
                             .await
                             .map_err(|e| e.to_string())?;
 
-                        let inputs: Vec<FaceMetricsInput> = faces
-                            .iter()
-                            .map(|f| FaceMetricsInput {
-                                sharpness: f.sharpness,
-                                area_ratio: f.area_ratio,
-                                det_score: f.det_score,
-                                center_proximity: f.center_proximity,
-                                eye_openness: f.eye_openness,
-                                blink_penalty: f.blink_penalty,
-                                occlusion: Some(f.occlusion),
-                                eye_focus: f.eye_focus,
-                                face_focus: f.face_focus,
-                                eye_closed: judged(f)
-                                    .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Down)
-                                    .map(|s| s.eye_closed),
-                                looking_down: judged(f).is_some_and(|s| {
-                                    s.eye_state == lrg_ml::face_state::EyeState::Down
-                                }),
-                                smile: judged(f).map(|s| s.smile),
-                                eye_squint: judged(f).map(|s| s.eye_squint),
-                                gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
-                                mouth_open: judged(f).map(|s| s.mouth_open),
-                                luminance: judged_light(f).map(|l| l.luminance),
-                                across_face_stops: judged_light(f)
-                                    .and_then(|l| l.across_face_stops),
-                                blown: judged_light(f).map(|l| l.blown),
-                            })
-                            .collect();
-                        apply_face_aggregate(&mut main_metadata, &inputs, state_ran);
+                        apply_face_aggregate(&mut main_metadata, &faces, working_dims, state_ran);
                         log::info!("Photo {photo_id}: indexed {} face(s).", faces.len());
                     } else {
-                        apply_face_aggregate(&mut main_metadata, &[], state_ran);
+                        apply_face_aggregate(&mut main_metadata, &[], working_dims, state_ran);
                     }
                     // Set for *both* outcomes. Flagging only the faceless branch
                     // meant a photo that has faces never counted as checked, so
@@ -2737,12 +2876,91 @@ fn judged(face: &lrg_ml::faces::FaceResult) -> Option<&lrg_ml::face_state::FaceS
         .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Unknown)
 }
 
+fn metrics_input(f: &lrg_ml::faces::FaceResult) -> FaceMetricsInput {
+    FaceMetricsInput {
+        sharpness: f.sharpness,
+        area_ratio: f.area_ratio,
+        det_score: f.det_score,
+        center_proximity: f.center_proximity,
+        eye_openness: f.eye_openness,
+        blink_penalty: f.blink_penalty,
+        occlusion: Some(f.occlusion),
+        eye_focus: f.eye_focus,
+        face_focus: f.face_focus,
+        eye_closed: judged(f)
+            .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Down)
+            .map(|s| s.eye_closed),
+        looking_down: judged(f).is_some_and(|s| s.eye_state == lrg_ml::face_state::EyeState::Down),
+        smile: judged(f).map(|s| s.smile),
+        eye_squint: judged(f).map(|s| s.eye_squint),
+        gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
+        mouth_open: judged(f).map(|s| s.mouth_open),
+        luminance: judged_light(f).map(|l| l.luminance),
+        across_face_stops: judged_light(f).and_then(|l| l.across_face_stops),
+        blown: judged_light(f).map(|l| l.blown),
+    }
+}
+
+/// The faces that belong to the subject: those whose centre lies on its stored
+/// mask.
+///
+/// - A person: only the faces on them. Beside a person a face is a bystander —
+///   the spectator behind the athlete, the guest behind the couple — even
+///   when it is the only face in the frame.
+/// - An animal or a vehicle: the faces on it (the rider, the driver), and when
+///   none is, every face — the owner beside the dog is likely the point. On
+///   the public benchmark three portraits had a pet as the larger subject.
+/// - A thing (a cake, a ball), or no subject: every face.
+///
+/// A bystander behind a shallow depth of field is soft on purpose; counted, it
+/// rejected the keeper (Lightroom's assisted culling is criticised for exactly
+/// this). And where the soft background hid it, the frame read "faceless" next
+/// to its own twin, which cost it more still.
+fn subject_faces(
+    metadata: &Map<String, Value>,
+    faces: &[lrg_ml::faces::FaceResult],
+    (width, height): (usize, usize),
+) -> Vec<bool> {
+    use lrg_imaging::subject_focus::{on_stored_mask, read_stored_mask};
+    let kind = metadata.get("cull_subject_kind").and_then(Value::as_str);
+    let mask = (lrg_analysis::grouping::subject_is_current(metadata)
+        && matches!(kind, Some("person" | "animal" | "vehicle")))
+    .then(|| metadata.get(SUBJECT_MASK_FIELD).and_then(Value::as_str))
+    .flatten()
+    .and_then(read_stored_mask);
+    let every = vec![true; faces.len()];
+    let (Some(mask), true) = (&mask, width > 0 && height > 0) else {
+        return every;
+    };
+    let on: Vec<bool> = faces
+        .iter()
+        .map(|f| {
+            let x = (f.bbox[0] + f.bbox[2]) as f64 / 2.0 / width as f64;
+            let y = (f.bbox[1] + f.bbox[3]) as f64 / 2.0 / height as f64;
+            on_stored_mask(mask, x, y)
+        })
+        .collect();
+    if kind == Some("person") || on.iter().any(|&o| o) {
+        on
+    } else {
+        every
+    }
+}
+
 fn apply_face_aggregate(
     metadata: &mut Map<String, Value>,
-    faces: &[FaceMetricsInput],
+    faces: &[lrg_ml::faces::FaceResult],
+    working_dims: (usize, usize),
     state_ran: bool,
 ) {
-    let agg = aggregate_face_culling_metrics(faces, &FaceMetricsConfig::defaults());
+    let inputs: Vec<FaceMetricsInput> = faces
+        .iter()
+        .zip(subject_faces(metadata, faces, working_dims))
+        .filter(|(_, on_subject)| *on_subject)
+        .map(|(f, _)| metrics_input(f))
+        .collect();
+    let agg = aggregate_face_culling_metrics(&inputs, &FaceMetricsConfig::defaults());
+    metadata.insert(FACES_DETECTED_FIELD.into(), json!(faces.len()));
     metadata.insert("cull_face_count".into(), json!(agg.cull_face_count));
     metadata.insert("cull_face_sharpness".into(), json!(agg.cull_face_sharpness));
     metadata.insert(
@@ -2798,6 +3016,18 @@ fn apply_face_aggregate(
         }
         None => {
             metadata.remove("cull_eye_state");
+        }
+    }
+    match metadata
+        .get(lrg_analysis::grouping::SUBJECT_VERSION_KEY)
+        .filter(|_| lrg_analysis::grouping::subject_is_current(metadata))
+        .cloned()
+    {
+        Some(version) => {
+            metadata.insert(FACE_SUBJECT_KEY.into(), version);
+        }
+        None => {
+            metadata.remove(FACE_SUBJECT_KEY);
         }
     }
     // Present only when the face state model ran on this pass: a stamp left
@@ -4089,5 +4319,124 @@ mod image_source_tests {
             );
         }
         assert!(concurrency_from(None) >= 1);
+    }
+}
+
+#[cfg(test)]
+mod subject_face_tests {
+    use super::*;
+    use lrg_imaging::subject_focus::{Subject, STORED_GRID};
+
+    fn face(bbox: [i64; 4], area_ratio: f64, eye_focus: f64) -> lrg_ml::faces::FaceResult {
+        lrg_ml::faces::FaceResult {
+            embedding: Vec::new(),
+            thumbnail_base64: String::new(),
+            bbox,
+            area_ratio,
+            sharpness: eye_focus,
+            det_score: 0.9,
+            center_proximity: 0.8,
+            eye_openness: 0.8,
+            blink_penalty: 0.0,
+            occlusion: 0.0,
+            kps: [[0.0; 2]; 5],
+            eye_focus: Some(eye_focus),
+            face_focus: Some(eye_focus),
+            eye_px: 40.0,
+            focus_scale: 1.0,
+            state: None,
+        }
+    }
+
+    /// A portrait on a 1000×1000 working copy: the subject fills the left
+    /// half, and a second person stands soft in the background on the right.
+    fn portrait_metadata() -> Map<String, Value> {
+        subject_metadata("person")
+    }
+
+    fn subject_metadata(kind: &str) -> Map<String, Value> {
+        let grid = STORED_GRID;
+        let mut mask = vec![false; grid * grid];
+        for y in 2..grid {
+            for x in 2..grid / 2 {
+                mask[y * grid + x] = true;
+            }
+        }
+        let subject = Subject {
+            kind: kind.into(),
+            score: 0.9,
+            grid,
+            mask,
+            area: 0.4,
+            center: (0.25, 0.55),
+        };
+        let mut m = Map::new();
+        m.insert("cull_subject_kind".into(), json!(kind));
+        m.insert(
+            lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+            json!(lrg_analysis::grouping::SUBJECT_VERSION),
+        );
+        m.insert(SUBJECT_MASK_FIELD.into(), json!(subject.stored_mask()));
+        m
+    }
+
+    #[test]
+    fn a_soft_bystander_beside_the_subject_does_not_count() {
+        let faces = [
+            face([180, 100, 330, 280], 0.03, 0.9),
+            face([700, 150, 820, 290], 0.02, 0.1),
+        ];
+        let mut m = portrait_metadata();
+        apply_face_aggregate(&mut m, &faces, (1000, 1000), false);
+        assert_eq!(m["cull_face_count"], json!(1));
+        assert_eq!(m["cull_eye_focus"], json!(0.9));
+        assert_eq!(
+            m[FACE_SUBJECT_KEY],
+            json!(lrg_analysis::grouping::SUBJECT_VERSION)
+        );
+
+        // Without a subject reading every face counts, the bystander's soft
+        // eyes included, and nothing is stamped.
+        let mut bare = Map::new();
+        apply_face_aggregate(&mut bare, &faces, (1000, 1000), false);
+        assert_eq!(bare["cull_face_count"], json!(2));
+        assert_eq!(bare["cull_eye_focus"], json!(0.1));
+        assert!(!bare.contains_key(FACE_SUBJECT_KEY));
+    }
+
+    #[test]
+    fn beside_a_person_no_face_counts_but_beside_a_thing_all_do() {
+        // Spectators on the right of an athlete seen from behind: the frame
+        // has no face that matters.
+        let faces = [
+            face([700, 150, 820, 290], 0.02, 0.8),
+            face([850, 150, 950, 290], 0.02, 0.6),
+        ];
+        let mut m = portrait_metadata();
+        apply_face_aggregate(&mut m, &faces, (1000, 1000), false);
+        assert_eq!(m["cull_face_count"], json!(0));
+        assert_eq!(m["cull_faces_present"], json!(false));
+        // Still a photo with faces for the face pass, and for People.
+        assert_eq!(faces_detected(&m), 2);
+
+        // The same faces around a cake, or beside a dog: they are the point.
+        for kind in ["object", "animal"] {
+            let mut m = subject_metadata(kind);
+            apply_face_aggregate(&mut m, &faces, (1000, 1000), false);
+            assert_eq!(m["cull_face_count"], json!(2), "{kind}");
+        }
+    }
+
+    #[test]
+    fn on_a_horse_only_the_rider_counts() {
+        // The rider's face is on the joined subject; a spectator's is not.
+        let faces = [
+            face([180, 100, 330, 280], 0.03, 0.9),
+            face([700, 150, 820, 290], 0.02, 0.1),
+        ];
+        let mut m = subject_metadata("animal");
+        apply_face_aggregate(&mut m, &faces, (1000, 1000), false);
+        assert_eq!(m["cull_face_count"], json!(1));
+        assert_eq!(m["cull_eye_focus"], json!(0.9));
     }
 }

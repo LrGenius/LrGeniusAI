@@ -1336,7 +1336,7 @@ after.
 | Step | What | Status |
 |---|---|---|
 | 0 | A public benchmark, a harness that scores it by defect, the margins and the clipping penalty it argued for | **done** |
-| 1 | The subject without a face: RF-DETR-Seg finds it, focus measured on it and on the background; noise compared between frames of equal sharpness; a `wildlife` preset | in progress |
+| 1 | The subject without a face: RF-DETR-Seg finds it, focus measured on it and on the background; only the subject's faces counted; noise compared between frames of equal sharpness; a `wildlife` preset | **done** — winner 31.7 → 73.3 %, must-keep lost 12.1 → 9.1 % ([numbers](Dev-Image-Culling-Benchmark.md#the-subject-pass)) |
 | 2 | The genre chooses the preset, per group | planned |
 | 3 | People who matter (the photographer's key people) and small faces in a crowd | planned |
 | 4 | Scenes, a target count or share, highlights across a shoot | planned |

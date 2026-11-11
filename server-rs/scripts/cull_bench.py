@@ -94,6 +94,7 @@ LICENCE_RE = re.compile(r"^(CC0|Public domain|PD|CC BY(-SA)? \d(\.\d)?)", re.I)
 # COCO labels the subject can be (torchvision's numbering).
 PERSON = 1
 ANIMALS = set(range(16, 26))  # bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe
+VEHICLES = set(range(2, 10))  # bicycle, car, motorcycle, airplane, bus, train, truck, boat
 
 
 @dataclass(frozen=True)
@@ -127,7 +128,7 @@ GENRES = (
     Genre("sport", "sports", ("Quality images of sports",), 2),
     Genre(
         "wildlife",
-        "default",
+        "wildlife",
         (
             "Quality images of birds",
             "Quality images of mammals",
@@ -484,11 +485,56 @@ def prominent_eyes(analysis: dict) -> list[dict]:
     return [p for p in people if p["iod"] >= 0.5 * top]
 
 
+def touching(a: np.ndarray, b: np.ndarray, grid: int = 78) -> bool:
+    """Whether two masks overlap or lie next to each other, on a grid as coarse
+    as the backend's: a rider's mask stops where the horse's starts."""
+
+    def coarse(mask: np.ndarray) -> np.ndarray:
+        h, w = mask.shape
+        ys = np.linspace(0, h, grid + 1).astype(int)[:-1]
+        xs = np.linspace(0, w, grid + 1).astype(int)[:-1]
+        m = mask.astype(np.int32)
+        return np.add.reduceat(np.add.reduceat(m, ys, axis=0), xs, axis=1) > 0
+
+    ca, cb = coarse(a), coarse(b)
+    padded = np.pad(ca, 1)
+    grown = np.zeros_like(ca)
+    for dy in range(3):
+        for dx in range(3):
+            grown |= padded[dy : dy + grid, dx : dx + grid]
+    return bool((grown & cb).any())
+
+
 def subject_instances(analysis: dict, genre: str) -> list[dict]:
     if genre == "wildlife":
         pool = [i for i in analysis["instances"] if i["label"] in ANIMALS]
     elif genre == "landscape":
         return []
+    elif genre == "sport":
+        # The athlete and what carries them: the horse under the rider, the
+        # bicycle, the car. Blurring around the rider alone made the horse
+        # "background", which no photographer would call it.
+        persons = [
+            i
+            for i in analysis["instances"]
+            if i["label"] == PERSON and i["score"] >= 0.8
+        ]
+        if not persons:
+            return []
+        largest = max(i["area"] for i in persons)
+        athletes = [i for i in persons if i["area"] >= 0.25 * largest]
+        body = np.zeros_like(athletes[0]["mask"], dtype=np.uint8)
+        for inst in athletes:
+            body |= inst["mask"].astype(np.uint8)
+        mounts = [
+            i
+            for i in analysis["instances"]
+            if (i["label"] in ANIMALS or i["label"] in VEHICLES)
+            and i["score"] >= 0.6
+            and i["area"] >= 0.25 * largest
+            and touching(body, i["mask"])
+        ]
+        return athletes + mounts
     else:
         pool = [
             i
@@ -499,6 +545,25 @@ def subject_instances(analysis: dict, genre: str) -> list[dict]:
         return []
     largest = max(i["area"] for i in pool)
     return [i for i in pool if i["area"] >= 0.25 * largest]
+
+
+def ambiguous_subject(analysis: dict, genre: str) -> bool:
+    """A person the detector is less sure of, but as large as one of the
+    subject's, left out of it: blurring them is focus on one of two people, not
+    a shallow depth of field, and which one the photo is of is anyone's guess.
+    Such a photograph carries no subject defect."""
+    subject = subject_instances(analysis, genre)
+    people = [i for i in subject if i["label"] == PERSON]
+    if not people:
+        return False
+    smallest = min(i["area"] for i in people)
+    return any(
+        i["label"] == PERSON
+        and i["score"] >= 0.5
+        and i["area"] >= smallest
+        and not any(i is s for s in subject)
+        for i in analysis["instances"]
+    )
 
 
 def subject_area(analysis: dict, genre: str) -> float:
@@ -768,7 +833,11 @@ def make_variant(
         for inst in subject:
             union |= inst["mask"].astype(np.uint8)
     area = subject_area(analysis, genre)
-    has_subject = union is not None and 0.015 <= area <= 0.65
+    has_subject = (
+        union is not None
+        and 0.015 <= area <= 0.65
+        and not ambiguous_subject(analysis, genre)
+    )
 
     if variant.needs == "subject" and not has_subject:
         return None
@@ -787,6 +856,22 @@ def make_variant(
         return to_image(line_blur(sharp, int(0.006 * long_edge), angle))
     if name == "eyes_soft":
         people = [p for p in prominent_eyes(analysis) if p["iod"] >= 45]
+        if union is not None:
+            # Only the subject's eyes: a spectator's or a passer-by's soft eyes
+            # are not a missed focus, and the backend rightly ignores them.
+            if ambiguous_subject(analysis, genre):
+                return None
+            mh, mw = union.shape
+            iw, ih = image.size
+
+            def on_subject(person: dict) -> bool:
+                x = sum(e[0] for e in person["eyes"]) / len(person["eyes"])
+                y = sum(e[1] for e in person["eyes"]) / len(person["eyes"])
+                mx = min(int(x * mw / iw), mw - 1)
+                my = min(int(y * mh / ih), mh - 1)
+                return bool(union[my, mx])
+
+            people = [p for p in people if on_subject(p)]
         if not people:
             return None
         h, w = sharp.shape[:2]
@@ -844,7 +929,9 @@ def cmd_make(args: argparse.Namespace) -> None:
         frames = []
         for variant in VARIANTS:
             path = out_dir / f"{variant.name}.jpg"
-            if not path.exists() or args.force:
+            if not path.exists() or (
+                args.force and (not args.genres or genre in args.genres)
+            ):
                 frame = make_variant(variant, image, analysis, genre, key)
                 if frame is None:
                     continue
@@ -1047,6 +1134,12 @@ def main() -> None:
 
     p = sub.add_parser("make", help="download and make the series")
     p.add_argument("--force", action="store_true", help="make every frame again")
+    p.add_argument(
+        "--genres",
+        nargs="*",
+        choices=list(GENRE_BY_NAME),
+        help="with --force, only these genres' frames",
+    )
     p.set_defaults(func=cmd_make)
 
     p = sub.add_parser("run", help="index on a backend, write fixtures")

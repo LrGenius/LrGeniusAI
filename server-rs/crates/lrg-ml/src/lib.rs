@@ -186,6 +186,7 @@ pub mod genre;
 pub mod model_paths;
 pub mod naflex_pre;
 pub mod siglip;
+pub mod subject;
 pub mod text_pre;
 pub(crate) mod tower;
 pub mod umeyama;

@@ -82,6 +82,12 @@ jobs:
             --pattern 'face_mesh_v2.onnx' \
             --pattern 'face_blendshapes_v2.onnx'
 
+          # RF-DETR-Seg Nano (the subject for culling), published by
+          # model-assets-subject.yml; its goldens are committed
+          # (testdata/subject_goldens.json).
+          gh release download subject-assets-v1 --repo "$GITHUB_REPOSITORY" --dir "$dest" \
+            --pattern 'subject_rfdetr_seg_nano.onnx'
+
           gh release download bioclip-assets-v1 --repo "$GITHUB_REPOSITORY" --dir "$dest" \
             --pattern 'bioclip2_image_fp16.onnx' \
             --pattern 'bioclip2_taxa.bin' \

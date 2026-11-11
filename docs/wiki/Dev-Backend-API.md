@@ -65,6 +65,7 @@ when it is `"failed"`.
 | `face_model` / `face_error` | YuNet + the active recognizer (FaceNet or AuraFace). |
 | `face_recognizer` | Which recognizer is active: `"facenet"` or `"auraface"` (see `GET /v1/faces/recognizer`). |
 | `face_state_model` / `face_state_error` | MediaPipe Face Mesh V2 + Blendshape V2, which read eye state, smile and gaze for culling. |
+| `subject_model` / `subject_error` | RF-DETR-Seg Nano, which finds a photo's subject so culling can measure focus on it. |
 | `species_model` / `species_error` | BioCLIP 2. |
 
 The two SigLIP2 towers load and idle-unload **independently**, so an
@@ -286,6 +287,36 @@ the model ran on this pass. Without the model
 the response says once that a rough eye estimate was used, with the fix
 (`"Photos were analysed without eye state, smile and gaze: …"`).
 
+**The subject, and focus on it.** The `cull` task, or `subject` on its own, finds the
+photo's subject when the `subject` model is on disk (`lrg_ml::subject`, RF-DETR-Seg Nano: COCO
+objects with masks, on a 312 px square of the working copy) and measures focus on it and on
+the background (`lrg_imaging::subject_focus`). The subject is the object with the most weight
+— the model's score, times the square root of its area, times how central it is — joined by
+others of its kind at least a quarter its size (the second person of a couple), and by a person,
+animal or vehicle of that size touching it (the rider of a horse, the cyclist on a bicycle);
+furniture and street fixtures are never the subject, and nothing under 0.4 % of the frame is. Focus is the
+blur effect over tiles of the working copy (a sixth of the subject's size, 32–96 px), the 80th
+percentile of the tiles inside the subject and of those clear of it. Per photo:
+`cull_subject_kind` (`person`/`animal`/`vehicle`/`object`), `cull_subject_score`,
+`cull_subject_area`, `cull_subject_x`/`_y`, `cull_subject_focus` and `cull_background_focus`
+(absent when too little could be measured), `cull_background_streak` (how much sharper the
+background reads along one axis than across it, high for a pan), `cull_subject_mask` (the
+subject's mask on a 26×26 grid, hex, eight cells to a byte), and always `cull_subject_version`
+and `cull_subject_model`, also when no subject was found. Without the model the response says
+once that sharpness was judged on the whole frame, with the fix.
+
+The face pass then counts only the faces that belong to the subject — a face whose centre lies on
+that mask — so a bystander soft behind a shallow depth of field does not reject the keeper, and a
+spectator's face that the soft background hides does not make the frame "faceless" beside its
+twin. For a person that holds even when no face is on them (an athlete seen from behind): the
+frame then has no face that matters. For an animal or a vehicle the faces on it count (the
+rider), and when none is, every face (the owner beside the dog). Beside a thing (a cake, a ball)
+and without a subject, every face counts. `cull_face_count` and the `cull_face_*` and
+`cull_eye_*` aggregates are over the faces that count; `cull_faces_detected` is every face found,
+which is what decides whether the face pass has readings to bring up to date, for People too.
+`cull_face_subject_version` records the subject version the face aggregates were taken against;
+a cull pass over a photo whose subject reading is newer runs the face step again.
+
 `/v1/index/unprocessed` does **not** count a missing preview as outstanding:
 the cull pre-flight and the agent's indexing command ask it too, and would offer
 to prepare photos that lack nothing they need. Photos indexed before previews
@@ -408,11 +439,11 @@ producer this build uses*, not merely present:
 | task | outstanding when |
 | --- | --- |
 | `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
-| `faces` | no face rows and no `faces_checked`, a `face_model` that is not this build's, or — once its model is on disk — a photo with faces whose `cull_face_state_version` is missing or older, or that a culling pass left with face rows it could not match (`face_rows_behind`) |
+| `faces` | no face rows and no `faces_checked`, a `face_model` that is not this build's, or — once its model is on disk — a photo with faces (`cull_faces_detected` > 0, or `cull_face_count` on a photo prepared before that existed) whose `cull_face_state_version` is missing or older, or that a culling pass left with face rows it could not match (`face_rows_behind`) |
 | `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
 | genre (with `embeddings`, `cull` and `aesthetic`) | an embedding but no `genre`, or a `genre_version` that is not this build's (the genre list or its prompts changed), and only when the search model is on disk. Made again from the stored embedding, so the photo is not re-embedded |
 | `species` | no `species_checked`, or a `species_model` that is not the head on disk |
-| `cull` | faces (`cull_face_count` > 0) and no `cull_face_state_version` while the face state model is on disk; no `cull_phash`, no `cull_faces_present` key, no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again), or faces (`cull_face_count` > 0) but no `cull_focus_version` — prepared before eye and face focus were measured. The cull pass then runs the face step again even on a photo whose faces are already checked; it writes no identities, only the culling fields |
+| `cull` | faces (`cull_face_count` > 0) and no `cull_face_state_version` while the face state model is on disk; no `cull_phash`, no `cull_faces_present` key, no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again), or faces (`cull_face_count` > 0) but no `cull_focus_version` — prepared before eye and face focus were measured. The cull pass then runs the face step again even on a photo whose faces are already checked; it writes no identities, only the culling fields. Also, while the subject model is on disk, no current `cull_subject_version` or another `cull_subject_model` — prepared before the subject was found — or faces (`cull_faces_detected` > 0) whose `cull_face_subject_version` is not the photo's `cull_subject_version`, counted before the subject told them from bystanders |
 | `metadata` | no title, caption, alt_text or keywords |
 
 `regenerate_metadata` overrides all of them.
@@ -581,7 +612,7 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | Field | Type | Description |
 |---|---|---|
 | `photo_ids` | array | Photos to cull. Ids with no stored record are skipped and counted in `summary.unindexed_count` |
-| `culling_preset` | string | `default`, `portrait`, `street`, `event` or `sports`. 400 with `available_presets` for anything else |
+| `culling_preset` | string | `default`, `portrait`, `street`, `event`, `sports` or `wildlife`. 400 with `available_presets` for anything else |
 | `time_delta_seconds` | int | Burst window. Absent means the preset's own |
 | `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
 | `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
@@ -601,6 +632,27 @@ the database (below), and never stored themselves. Within a
 group the moment applies only when every frame has it, and frames with a
 defect no edit repairs (blur, unintended closed eyes, occlusion, focus that
 missed the eyes) always rank below usable ones.
+
+**Focus on the subject** (`cull_subject_focus`, `cull_background_focus`,
+`cull_background_streak`, stored by the subject step of `/v1/index/photos`) acts only
+when every frame of a group carries the current `cull_subject_version` (all or
+nothing), and a frame without a subject abstains:
+
+- in the score, as `subject_focus_weight` of the sharpness the technical term reads,
+  against the group like exposure (0.5; `wildlife` 0.75);
+- a subject at `reason_subject_focus_threshold` and close to the group's sharpest is
+  *in focus*, and then a soft frame-wide reading is not a blur defect — a shallow depth
+  of field or a pan, as sharp eyes already settle it for a face;
+- below `reason_subject_focus_threshold` and `relative_subject_margin` behind the
+  group's sharpest subject, the reason `subject_out_of_focus`, or `focus_on_background`
+  when the background reads `reason_background_sharper_margin` sharper; below
+  `reject_subject_focus_threshold`, a clear defect. Never for a single;
+- `panning` on a frame whose subject is in focus and whose background is streaked at
+  `reason_panning_streak` or more; `subject_sharpest_in_group` on a pick within
+  `reason_sharpest_delta` of the sharpest subject.
+
+Photos without a current reading are counted in `warnings`, with the fix ("Prepare
+now", or "Download AI models" when the model is missing).
 
 **Eye and face focus** (`cull_eye_focus`, `cull_face_focus`, stored by the
 face pass of `/v1/index/photos`) are `1 - blur_effect` (Crété-Roffet, as
@@ -1413,10 +1465,12 @@ network does which job.
 
 ### `GET /v1/models/assets`
 Per-family readiness plus one overall `ready` flag and `missing_approx_bytes`
-for the "this will download about N GB" line. All five families — `clip`, `aesthetic`
-(the photo quality scorer), `bioclip`, `face` and `face_state` (eye state, smile and gaze,
-~7 MB, tag `face-state-assets-v1`) — are `downloadable: true` and all five gate `ready`.
-`face_state` is a family of its own so that face detection never reports "not ready" because of it.
+for the "this will download about N GB" line. All six families — `clip`, `aesthetic`
+(the photo quality scorer), `bioclip`, `face`, `face_state` (eye state, smile and gaze,
+~7 MB, tag `face-state-assets-v1`) and `subject` (RF-DETR-Seg Nano, which finds a photo's
+subject for culling, ~123 MB, tag `subject-assets-v1`) — are `downloadable: true` and all
+six gate `ready`. `face_state` and `subject` are families of their own so that face
+detection never reports "not ready" because of them.
 Face detection used to be the exception: its `buffalo_l` weights came from
 `INSIGHTFACE_ROOT`, were not redistributable, and had to be excluded from
 `ready` so the button did not stay red forever over something the download

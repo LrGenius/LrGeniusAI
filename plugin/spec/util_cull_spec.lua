@@ -26,11 +26,11 @@ describe("Util.cullPrepTasks", function()
 
 	it("asks for the image model as well as the face model", function()
 		assert.are.same(
-			{ "clip", "aesthetic", "face", "face_state" },
+			{ "clip", "aesthetic", "face", "face_state", "subject" },
 			Util.requiredModelFamilies(Util.cullPrepTasks("sports"))
 		)
 		assert.are.same(
-			{ "aesthetic", "face", "face_state" },
+			{ "aesthetic", "face", "face_state", "subject" },
 			Util.requiredModelFamilies(Util.cullPrepTasks("default"))
 		)
 	end)
