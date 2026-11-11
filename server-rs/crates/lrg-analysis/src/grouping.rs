@@ -376,6 +376,9 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
             "panorama_frame_kept" => "part of a panorama sweep — kept, not culled".to_string(),
             "underexposed" => "darker than stronger alternatives".to_string(),
             "overexposed" => "brighter than stronger alternatives".to_string(),
+            "highlights_clipped" => {
+                "highlights blown out where a sibling frame kept them".to_string()
+            }
             "low_aesthetic" => "weaker aesthetic impression than alternatives".to_string(),
             "best_face_quality" => "best face quality in group".to_string(),
             "weak_face_quality" => "weaker face quality than alternatives".to_string(),
@@ -454,6 +457,18 @@ fn rank_group_records(
     // detail as grain), so a group indexed half before and half after the
     // flat one shipped must not compare one frame's grain with another's
     // texture. All or nothing per group, like the moment.
+    // The least clipped frame of the group, for the clipping penalty: blown
+    // highlights count only beyond what every frame of the burst shares.
+    let least_clipped = records
+        .iter()
+        .map(|r| metric(&r.metadata, "cull_highlight_clip", 0.0))
+        .fold(f64::INFINITY, f64::min);
+    let clip_excess = |clip: f64| -> f64 {
+        if records.len() < 2 || cfg.ranking.clip_penalty_scale <= 0.0 {
+            return 0.0;
+        }
+        ((clip - least_clipped).max(0.0) / cfg.ranking.clip_penalty_scale).min(1.0)
+    };
     let all_have_flat_noise = records.iter().all(|r| {
         r.metadata
             .get("cull_noise_flat")
@@ -521,7 +536,8 @@ fn rank_group_records(
                     (im.technical_weight_sharpness * sharpness_effective
                         + im.technical_weight_exposure * exposure
                         + im.technical_weight_noise * (1.0 - noise_penalty))
-                        / weight_sum.max(1e-6),
+                        / weight_sum.max(1e-6)
+                        - cfg.ranking.clip_penalty_weight * clip_excess(highlight_clip),
                 )
             } else {
                 metric(m, "cull_technical_score", technical_default)
@@ -1071,7 +1087,15 @@ fn rank_group_records(
                 },
             );
         }
-        if item.cull_exposure < rk.reason_exposure_threshold {
+        // Named on its own, whatever the exposure term says: a frame can sit
+        // nearer mid-grey than its sibling and still have lost its highlights.
+        let blown = rk.clip_penalty_weight > 0.0
+            && scored.len() > 1
+            && item.cull_highlight_clip - least_clipped >= rk.clip_penalty_scale;
+        if blown {
+            reason_codes.push("highlights_clipped".to_string());
+        }
+        if !blown && item.cull_exposure < rk.reason_exposure_threshold {
             reason_codes.push(if item.cull_shadow_clip >= item.cull_highlight_clip {
                 "underexposed".to_string()
             } else {
@@ -1956,7 +1980,8 @@ mod tests {
         // ...but a frame whose eyes are visibly less open than the best, or
         // whose face is visibly more obstructed, still is.
         let mut worse = burst.clone();
-        worse.push(frame("blink", 1001.5, 0.02, 0.80));
+        // 0.15 below the most open eyes: past `relative_defect_margin` (0.14).
+        worse.push(frame("blink", 1001.5, 0.0, 0.80));
         // 0.25 above the clearest face: past occlusion's own, wider margin.
         worse.push(frame("covered", 1002.0, 0.15, 0.95));
         let groups = run(worse);

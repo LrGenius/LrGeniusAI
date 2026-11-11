@@ -82,10 +82,18 @@ fn ablate(mut cfg: CullingConfig, knob: &str) -> CullingConfig {
             cfg.ranking.reason_face_focus_threshold = 0.0;
             cfg.ranking.reject_face_focus_threshold = 0.0;
         }
+        // What the first run of the public benchmark changed: back to the
+        // margins it replaced, and no clipping penalty.
+        "benchmark-calibration" => {
+            cfg.ranking.clip_penalty_weight = 0.0;
+            cfg.ranking.relative_defect_margin = 0.10;
+            cfg.ranking.relative_occlusion_margin = 0.10;
+            cfg.ranking.relative_blur_rule = false;
+        }
         other => panic!(
             "unknown --ablate knob {other:?}; expected one of: \
              sharpness-peak, relative, aesthetic-model, semantic, emotion, usable-gate, \
-             kiss-gate, single-rejects, sets, eye-focus"
+             kiss-gate, single-rejects, sets, eye-focus, benchmark-calibration"
         ),
     }
     cfg
@@ -164,6 +172,16 @@ const KNOBS: &[Knob] = &[
         name: "semantic_weight",
         values: &[0.0, 0.15, 0.3, 0.45, 0.6],
         set: |c, v| c.ranking.semantic_weight = v,
+    },
+    Knob {
+        name: "clip_penalty_weight",
+        values: &[0.0, 0.1, 0.2, 0.3, 0.45],
+        set: |c, v| c.ranking.clip_penalty_weight = v,
+    },
+    Knob {
+        name: "clip_penalty_scale",
+        values: &[0.02, 0.05, 0.1, 0.2],
+        set: |c, v| c.ranking.clip_penalty_scale = v,
     },
     Knob {
         name: "reject_exposure_threshold",
@@ -348,7 +366,7 @@ fn main() {
              --ablate KNOB   also run with one knob rolled back, and show the delta\n\
              \x20               (sharpness-peak | relative | aesthetic-model | semantic |\n\
              \x20                emotion | usable-gate | kiss-gate | single-rejects | sets |\n\
-             \x20                eye-focus)\n\
+             \x20                eye-focus | benchmark-calibration)\n\
              --by-defect     a table per labelled defect (the public benchmark)\n\
              --tune KNOBS    sweep each knob alone and show what each value scores:\n\
              \x20               {}",

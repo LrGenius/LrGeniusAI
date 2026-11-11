@@ -157,6 +157,15 @@ sources = [
   "server-rs/crates/lrg-api/src/species_links.rs",
 ]
 
+# The benchmark page reports numbers measured with these; a change to how
+# they score or what the script makes is a change to the page.
+[page."Dev-Image-Culling-Benchmark.md"]
+sources = [
+  "server-rs/scripts/cull_bench.py",
+  "server-rs/crates/lrg-analysis/src/eval.rs",
+  "server-rs/testdata/cull_bench/fixtures/*.json",
+]
+
 [page."Help-Cull-Photos.md"]
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskCullPhotos.lua",

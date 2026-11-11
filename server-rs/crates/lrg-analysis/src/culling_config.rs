@@ -118,6 +118,22 @@ pub struct RankingConfig {
     /// relative normalisation engages. Below this the group agrees, and
     /// stretching noise to fill 0..1 would manufacture a ranking out of it.
     pub relative_min_spread: f64,
+    /// How much of the technical score a frame loses for highlights blown out
+    /// beyond the least clipped frame of its group, at
+    /// [`Self::clip_penalty_scale`] and more. 0 leaves clipping out.
+    ///
+    /// The exposure term asks how close the mean is to mid-grey, which a frame
+    /// a stop and a third brighter can answer better than the original while
+    /// 14 % of it is blown white. On the public benchmark that frame took the
+    /// pick in 21 of 120 series. Lightroom lifts a stop of shadow without a
+    /// trace and recovers nothing from a clipped highlight, so clipping is
+    /// what costs, and only against a sibling: a high-key photograph clipped
+    /// on purpose is clipped in every frame of its burst.
+    pub clip_penalty_weight: f64,
+    /// The excess of highlight clipping over the group's least clipped frame
+    /// (a share of the frame) at which the penalty is full, and from which the
+    /// frame is labelled `highlights_clipped`.
+    pub clip_penalty_scale: f64,
     /// How much of the aesthetic signal comes from the AestheticSigLIP score
     /// stored with the photo (`aesthetic_score`, scaled to `0..1` by the API
     /// layer as `cull_aesthetic_model`) rather than the contrast/colourfulness
@@ -251,13 +267,17 @@ pub struct RankingConfig {
     /// The occlusion proxy's own margin. It moves by 0.1–0.35 between frames
     /// of one group of people (head turns, side light; median spread 0.11
     /// measured on a real shoot), roughly half its whole range, so the
-    /// shared margin fired in most multi-face groups.
+    /// shared margin fired in most multi-face groups. 0.20, the candidate
+    /// measured on that shoot, since the public benchmark found the same: at
+    /// 0.10 five of seven sport originals it nominated for deletion were
+    /// "occluded" against a copy of themselves a stop brighter.
     pub relative_occlusion_margin: f64,
     /// Judge blur against the group too (soft *and* clearly softer than the
-    /// sharpest sibling). **Off by default, pending calibration:** it and the
-    /// wider occlusion margin were fitted to the stored metrics of one shoot,
-    /// and the maintainers asked to hold them until a hand-cull comparison
-    /// across genres exists. `--ablate` them in `cull_eval` once it does.
+    /// sharpest sibling). On since the public benchmark
+    /// (`testdata/cull_bench`), which agreed with the real baptism shoot it
+    /// was first fitted to: reject precision 82.3 % → 82.8 %, must-keep frames
+    /// lost 25.4 % → 24.6 %, recall unchanged. Still to be confirmed against a
+    /// hand cull across genres.
     pub relative_blur_rule: bool,
     /// How much of the face term in a face group's score comes from the eye
     /// focus (`cull_eye_focus`, scored against the group like exposure) rather
@@ -479,6 +499,8 @@ impl CullingConfig {
         cfg.ranking.usable_gate = false;
         cfg.ranking.reject_blurred_without_alternative = false;
         cfg.ranking.relative_defect_rules = false;
+        cfg.ranking.relative_blur_rule = false;
+        cfg.ranking.clip_penalty_weight = 0.0;
         cfg.ranking.eye_focus_weight = 0.0;
         cfg.ranking.reason_eye_focus_threshold = 0.0;
         cfg.ranking.reject_eye_focus_threshold = 0.0;
@@ -538,6 +560,8 @@ const BASE: CullingConfig = CullingConfig {
         recompute_technical_score: true,
         relative_normalization_weight: 0.5,
         relative_min_spread: 0.03,
+        clip_penalty_weight: 0.2,
+        clip_penalty_scale: 0.05,
         aesthetic_model_weight: 0.9,
         // No axis by default: "default" spans every genre, and there is no
         // question that is right for all of them.
@@ -550,11 +574,14 @@ const BASE: CullingConfig = CullingConfig {
         reason_motion_anisotropy_threshold: 0.55,
         reason_moment_margin: 0.15,
         relative_defect_rules: true,
-        relative_defect_margin: 0.10,
-        // Same as the shared margin until calibrated; 0.20 (half the proxy's
-        // range) is the measured candidate — see `relative_blur_rule`.
-        relative_occlusion_margin: 0.10,
-        relative_blur_rule: false,
+        // 0.14 since the public benchmark: the face state model's lids read
+        // up to 0.1 apart between a frame and the same frame a stop brighter,
+        // so at 0.10 originals were "blinks" against their own copies (reject
+        // precision 82.3 % → 84.6 %, must-keep lost 25.4 % → 20.4 %, recall
+        // 70.0 % → 69.7 %).
+        relative_defect_margin: 0.14,
+        relative_occlusion_margin: 0.20,
+        relative_blur_rule: true,
         eye_focus_weight: 0.35,
         reason_eye_focus_threshold: 0.52,
         reject_eye_focus_threshold: 0.45,

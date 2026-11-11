@@ -1325,3 +1325,28 @@ reads alike there. And portraits from Commons are not a shoot, so **the threshol
 stay hypotheses** until a hand-culled shoot with real blinks has been scored with
 `cull_eval --ablate` — the same caveat as every other threshold here.
 
+## Matching the established tools
+
+Planned on 2026-11-10 after researching what the other culling tools judge
+([Dev-Image-Culling-Competitive-Analysis.md](Dev-Image-Culling-Competitive-Analysis.md)).
+Each step is measured on the public benchmark
+([Dev-Image-Culling-Benchmark.md](Dev-Image-Culling-Benchmark.md)) before and
+after.
+
+| Step | What | Status |
+|---|---|---|
+| 0 | A public benchmark, a harness that scores it by defect, the margins and the clipping penalty it argued for | **done** |
+| 1 | The subject without a face: RF-DETR-Seg finds it, focus measured on it and on the background; noise compared between frames of equal sharpness; a `wildlife` preset | in progress |
+| 2 | The genre chooses the preset, per group | planned |
+| 3 | People who matter (the photographer's key people) and small faces in a crowd | planned |
+| 4 | Scenes, a target count or share, highlights across a shoot | planned |
+| 5 | Animal eyes | planned, licence gate first |
+| 6 | Learning the photographer's taste from the catalog's flags and stars, locally | planned |
+| 7 | A vision model for close calls, optional, with its reason in words | planned |
+
+Already at the level of the best of them: judging against the burst rather
+than absolute thresholds, eye focus on the full-size original, eye state with
+an explicit "unknown", an explanation for every frame, and brackets, focus
+stacks and panoramas recognised and kept. Missing at the start: everything in
+the table.
+

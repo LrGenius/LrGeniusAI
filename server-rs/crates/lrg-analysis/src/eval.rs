@@ -198,6 +198,9 @@ fn default_preset() -> String {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DefectStats {
     pub photos: usize,
+    /// Had the best score of its labelled group: which defect takes the top
+    /// spot when the winner is wrong.
+    pub won: usize,
     /// Nominated for deletion.
     pub rejected: usize,
     /// Of `photos`, labelled `reject`: the frames this defect should cost.
@@ -224,6 +227,7 @@ pub struct DefectStats {
 impl DefectStats {
     fn add(&mut self, other: &DefectStats) {
         self.photos += other.photos;
+        self.won += other.won;
         self.rejected += other.rejected;
         self.reject_labelled += other.reject_labelled;
         self.reject_found += other.reject_found;
@@ -411,14 +415,23 @@ impl EvalReport {
             }
         };
         let mut out = format!(
-            "  {:<18}{:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}\n",
-            "defect", "frames", "rejected", "found", "kept-ok", "ordered", "named", "misnamed"
+            "  {:<18}{:>6} {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}\n",
+            "defect",
+            "frames",
+            "won",
+            "rejected",
+            "found",
+            "kept-ok",
+            "ordered",
+            "named",
+            "misnamed"
         );
         for (defect, s) in &self.by_defect {
             out.push_str(&format!(
-                "  {:<18}{:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}\n",
+                "  {:<18}{:>6} {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}\n",
                 defect,
                 s.photos,
+                s.won,
                 cell(s.rejected as f64, s.photos),
                 cell(s.reject_found as f64, s.reject_labelled),
                 cell((s.must_keep - s.must_keep_rejected) as f64, s.must_keep),
@@ -711,6 +724,9 @@ pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
             });
             if by_score[0].0.rank == Some(1) {
                 report.winner_hits += 1;
+            }
+            if let Some(defect) = &by_score[0].0.defect {
+                report.by_defect.entry(defect.clone()).or_default().won += 1;
             }
             let order: Vec<f64> = by_score
                 .iter()

@@ -188,7 +188,13 @@ VARIANTS = (
     # Lightroom lifts a stop without a trace: worse than the twin, never a
     # defect on its own.
     Variant("under", None, 2, reject_optional=True, expect=("underexposed",)),
-    Variant("over", None, 2, reject_optional=True, expect=("overexposed",)),
+    Variant(
+        "over",
+        None,
+        2,
+        reject_optional=True,
+        expect=("overexposed", "highlights_clipped"),
+    ),
     Variant("noise", None, 2, reject_optional=True),
 )
 
@@ -687,22 +693,22 @@ def gaussian(image: Image.Image, sigma: float) -> np.ndarray:
 
 
 def line_blur(array: np.ndarray, length: int, angle_degrees: float) -> np.ndarray:
-    """Camera shake: a straight streak `length` pixels long at an angle."""
-    import torch
-    import torch.nn.functional as F
-
-    size = length | 1
-    kernel = np.zeros((size, size), dtype=np.float32)
-    c = size // 2
+    """Camera shake: a straight streak `length` pixels long at an angle, as the
+    mean of the frame shifted to each whole-pixel point along the streak."""
+    c = length // 2
     a = math.radians(angle_degrees)
-    for t in np.linspace(-c, c, size * 4):
-        x, y = c + t * math.cos(a), c + t * math.sin(a)
-        kernel[int(round(y)), int(round(x))] = 1.0
-    kernel /= kernel.sum()
-    tensor = torch.from_numpy(array).permute(2, 0, 1).unsqueeze(1)
-    padded = F.pad(tensor, (c, c, c, c), mode="replicate")
-    out = F.conv2d(padded, torch.from_numpy(kernel)[None, None])
-    return out.squeeze(1).permute(1, 2, 0).numpy()
+    offsets = sorted(
+        {
+            (int(round(t * math.cos(a))), int(round(t * math.sin(a))))
+            for t in np.linspace(-c, c, length * 4)
+        }
+    )
+    h, w = array.shape[:2]
+    padded = np.pad(array, ((c, c), (c, c), (0, 0)), mode="edge")
+    out = np.zeros_like(array)
+    for dx, dy in offsets:
+        out += padded[c + dy : c + dy + h, c + dx : c + dx + w]
+    return out / len(offsets)
 
 
 def horizontal_blur(array: np.ndarray, length: int) -> np.ndarray:
@@ -724,9 +730,12 @@ def soft_mask(binary: np.ndarray, size: tuple[int, int], grow: float, feather: f
         size, Image.Resampling.BILINEAR
     )
     if grow > 0:
-        mask = mask.filter(ImageFilter.MaxFilter(int(grow) * 2 + 1))
-    elif grow < 0:
-        mask = mask.filter(ImageFilter.MinFilter(int(-grow) * 2 + 1))
+        # A blur and a low threshold grow the mask by about `grow` pixels in
+        # linear time; PIL's MaxFilter does the same in time square in the
+        # kernel, minutes per frame at this size.
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=grow / 2)).point(
+            lambda v: 255 if v > 12 else 0
+        )
     if feather > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(radius=feather))
     return (np.asarray(mask, dtype=np.float32) / 255.0)[..., None]

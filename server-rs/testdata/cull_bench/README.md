@@ -34,7 +34,7 @@ wildlife.
 | `background_soft` | background blurred (sigma 12 px), subject left sharp: a shallow depth of field | rank 1, **must keep**; must not be called blurred |
 | `panning` | background streaked sideways (75 px), subject left sharp | rank 1, **must keep**; must not be called blurred |
 | `blur_mild` | whole frame, sigma 1.5 px | rank 2, deleting it is optional |
-| `under` / `over` | −1 EV / +1.3 EV in linear light | rank 2, optional; should be named `underexposed` / `overexposed` |
+| `under` / `over` | −1 EV / +1.3 EV in linear light | rank 2, optional; should be named `underexposed` / `overexposed` or `highlights_clipped` |
 | `noise` | grain, about ISO 12 800 | rank 2, optional |
 | `blur_strong` | whole frame, sigma 6.6 px | rank 3, **reject**; `blurred` or `motion_blur` |
 | `motion` | camera shake, an 18 px streak at a random angle | rank 3, **reject**; `motion_blur` |

@@ -329,6 +329,7 @@ Typical reason codes include:
 - `sharpest_in_group`
 - `blurred`
 - `underexposed` / `overexposed`
+- `highlights_clipped` – highlights blown out where a sibling frame kept them
 - `best_face_quality` / `weak_face_quality`
 - `eyes_open_best`
 - `eyes_closed` – the eyes are closed, and another frame of the burst has them
@@ -410,9 +411,16 @@ Rejects for a blink, a blocked face or a weak face are judged against the
 other frames of the group as well as against fixed thresholds: a frame is only
 a blink when its eyes read clearly less open than the best frame of its burst.
 On small faces the eye estimate reads "closed" on every frame, so without this
-every frame but the pick was a reject. The same treatment for blur exists in
-the backend but is switched off until it has been checked against hand-culled
-shoots of several genres.
+every frame but the pick was a reject. Blur is judged the same way: a frame
+with siblings is only blurred when it is clearly softer than the sharpest of
+them, and a burst that missed focus throughout is still rejected whole.
+
+**Blown highlights cost, a dark frame hardly.** Between two frames of a burst,
+the one whose highlights are blown out where its sibling kept them ranks lower
+and says so ("highlights blown out where a sibling frame kept them").
+Lightroom lifts a stop of shadow without a trace and brings nothing back from
+a clipped highlight. A photo that is clipped on purpose, high key say, is
+clipped in every frame of its burst and loses nothing.
 
 ## Tips for best results
 
