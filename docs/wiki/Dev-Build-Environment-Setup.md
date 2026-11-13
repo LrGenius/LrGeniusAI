@@ -77,13 +77,29 @@ build panics without it):
 # Expected: something like C:\VulkanSDK\1.4.xxx.x
 ```
 
+Build this feature with Rust **1.99**, not the current stable. Cargo 1.100
+moved build-script output one directory deeper, and llama-cpp-sys-2's build
+script (up to 0.1.161) then panics while copying its DLLs:
+
+```
+panicked at ...\llama-cpp-sys-2-0.1.156\build.rs:1431:56:
+called `Result::unwrap()` on an `Err` value: Os { code: 3, kind: NotFound, ... }
+```
+
+The release build is held at 1.99 for the same reason (`rust_toolchain` in
+`.github/workflows/release.yml`). The baseline build is not affected.
+
+```powershell
+rustup toolchain install 1.99 --component clippy
+```
+
 Open a **new** terminal so the updated environment variables are picked up,
 then:
 
 ```powershell
 cd server-rs
-cargo build --release -p lrg-server --features llamacpp
-cargo clippy --workspace --all-targets --features llamacpp
+cargo +1.99 build --release -p lrg-server --features llamacpp
+cargo +1.99 clippy --workspace --all-targets --features llamacpp
 ```
 
 This is a from-source llama.cpp compile plus Vulkan shader compilation, so
