@@ -296,8 +296,19 @@ async fn the_style_is_round_zero_and_the_model_sees_both_images() {
         .await
         .unwrap_or_else(|e| panic!("{}", e.message));
     assert_eq!(first.round, 1);
+    // The model sent exposure and contrast only; the style's vibrance stays.
+    assert_eq!(first.develop_settings["Exposure2012"], json!(0.3));
+    assert_eq!(first.develop_settings["Vibrance"], json!(10));
+    assert_eq!(first.develop_settings["Temperature"], json!(5300));
     let opening = &model.requests()[0];
     assert!(opening.system.contains("photographer's own style"));
+    let ChatPart::Text(style_text) = &opening.messages[0].parts[3] else {
+        panic!("the style's render is followed by its text")
+    };
+    assert!(
+        style_text.contains("The edit this render shows:\n") && style_text.contains("vibrance 10"),
+        "{style_text}"
+    );
     let images = opening.messages[0]
         .parts
         .iter()

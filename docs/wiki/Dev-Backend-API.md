@@ -1073,7 +1073,7 @@ Multipart:
 | `language` | string | Language of the model's `assessment` and `verdict` |
 | `max_edits` | int | Edits the model may apply, 1–5 (default 3) |
 | `masks` | bool | Offer AI masks (subject, sky, background, people parts, landscape classes). The plugin sends `true` only on Lightroom 15.3+, where `photo:updateAISettings()` computes them |
-| `style_recipe` | JSON | The `edit` of a `/v1/edit/style` answer. When set, the photographer's style is **round 0**: it comes back as the first step without asking the model, and the model's first look is at the original *and* the style's render, told to keep the style and fix the frame |
+| `style_recipe` | JSON | The `edit` of a `/v1/edit/style` answer. When set, the photographer's style is **round 0**: it comes back as the first step without asking the model, and the model's first look is at the original *and* the style's render with its values, told to keep the style and fix the frame. Every edit the model sends is merged onto the style (`lrg_providers::edit_loop::merge_onto`): what it leaves out keeps the style's value, so the steps' tables carry the whole style plus the model's changes |
 | `db_path`, `catalog_id` | string | As elsewhere; the finished recipe is stored on the photo's record |
 
 Each step:
@@ -1105,9 +1105,11 @@ The render of the last step's edit (multipart `image`), plus optional
 it: an AI mask that found nothing, one not computed within 30 s, or a failed
 `updateAISettings()` (the plugin also shows these to the user when they concern the
 round the photo ends on). The model gets the render,
-its measurements (`lrg_imaging::tone`: luminance percentiles, histogram bands,
-clipping, the colour of the near-neutral tones, midtone saturation), how they moved
-against the original, and what did not reach the photo; it answers with the next
+the values of the edit it shows (`recipe_text`, so a model refining its edit has the
+numbers in front of it), its measurements (`lrg_imaging::tone`: luminance
+percentiles, histogram bands, clipping, the colour of the near-neutral tones,
+midtone saturation), how they moved against the original, and what did not reach
+the photo; it answers with the next
 step in the shape above. A `done` step ends the session and stores the kept recipe
 on the photo's record, as `/v1/edit/style` stores the recipe it generates: what the
 model made of the photo, whether or not the user then keeps it in the plugin's

@@ -52,10 +52,12 @@ about what the eye misjudges: clipping, levels and casts.
 Tick **Start from my own style** (it needs five saved training examples, see
 [My style only](#my-style-only)) and round 0 is your style: AI Edit blends your
 saved edits for the photo, applies the blend and shows the model the original
-and your style side by side. The model is told to keep your look — colour,
-contrast, choices — and to fix only what does not suit this frame: exposure,
-white balance, clipping, emphasis, local work. It can also decide your style was
-already right and keep it unchanged.
+and your style side by side, with your style's values. The model is told to keep
+your look — colour, contrast, choices — and to fix only what does not suit this
+frame: exposure, white balance, clipping, emphasis, local work. Its edits are
+made on top of your style: a setting it does not touch keeps your style's value,
+so your colour mix, grading and detail settings survive every round. It can also
+decide your style was already right and keep it unchanged.
 
 ### Look and your own words
 

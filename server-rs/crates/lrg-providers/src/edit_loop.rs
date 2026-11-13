@@ -270,10 +270,11 @@ earlier one.\n",
     if setup.from_style {
         out.push_str(
             "\nThe photo already carries the photographer's own style: the blend of their saved \
-edits on similar photos, shown to you as the first render. Keep that style — its colour, \
+edits on similar photos, shown to you as round 0 with its values. Keep that style — its colour, \
 contrast and choices — and fix only what does not suit this frame: exposure, white balance, \
-clipping, emphasis, local work. Stay near their values unless the frame clearly needs \
-otherwise.\n",
+clipping, emphasis, local work. Your edits are measured from the style, not from the photo \
+before it: a slider you leave out keeps the style's value, so send only what you change. Stay \
+near their values unless the frame clearly needs otherwise.\n",
         );
     }
     out.push_str(&format!(
@@ -642,18 +643,23 @@ pub fn opening_text(
 /// What the model is told about a render.
 pub fn render_text(
     edit_number: u32,
+    applied: &str,
     measurements: &str,
     against_original: &str,
     notes: &[String],
     edits_left: u32,
 ) -> String {
     let mut out = if edit_number == 0 {
-        "The photographer's own style, applied and rendered by Lightroom. It counts as round 0; \
-         your edits continue from the starting values, not from these."
+        "The photographer's own style, applied and rendered by Lightroom: round 0. Your edits \
+         start from it."
             .to_string()
     } else {
         format!("Round {edit_number}, rendered by Lightroom.")
     };
+    if !applied.is_empty() {
+        out.push_str("\n\nThe edit this render shows:\n");
+        out.push_str(applied);
+    }
     out.push_str("\n\nMeasurements of this render:\n");
     out.push_str(measurements);
     if !against_original.is_empty() {
@@ -674,6 +680,96 @@ pub fn render_text(
         )
     });
     out
+}
+
+fn flatten(prefix: &str, value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, v) in map {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                flatten(&path, v, out);
+            }
+        }
+        Value::Number(n) => {
+            let v = n.as_f64().unwrap_or(0.0);
+            if v != 0.0 {
+                out.push(format!("{prefix} {}", format_value(prefix, v)));
+            }
+        }
+        Value::String(text) => out.push(format!("{prefix} {text}")),
+        _ => {}
+    }
+}
+
+/// A recipe as the model reads it back: every global that is not 0, in
+/// recipe paths, then one line per mask.
+///
+/// Told with every render, so a model refining an edit has the numbers in
+/// front of it instead of having to recall its own earlier call — small
+/// local models otherwise drop the values they meant to keep.
+pub fn recipe_text(recipe: &Value) -> String {
+    let mut globals = Vec::new();
+    if let Some(global) = recipe.get("global") {
+        flatten("", global, &mut globals);
+    }
+    let mut out = if globals.is_empty() {
+        "(no global changes)".to_string()
+    } else {
+        globals.join(", ")
+    };
+    for mask in recipe
+        .get("masks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let target = mask.get("target").and_then(Value::as_str).unwrap_or("?");
+        let mut adjustments = Vec::new();
+        if let Some(a) = mask.get("adjustments") {
+            flatten("", a, &mut adjustments);
+        }
+        out.push_str(&format!("\nmask {target}: {}", adjustments.join(", ")));
+    }
+    out
+}
+
+/// `overlay` on top of `base`: the globals merged leaf by leaf (an overlay
+/// value wins, a base value the overlay does not mention stays), the masks
+/// the overlay's alone.
+///
+/// How a retoucher session started from the photographer's style turns the
+/// model's edit into the whole edit: the model sends what it changes, the
+/// style supplies the rest.
+pub fn merge_onto(base: &Value, overlay: &Value) -> Value {
+    fn merge(base: &Value, overlay: &Value) -> Value {
+        match (base, overlay) {
+            (Value::Object(b), Value::Object(o)) => {
+                let mut out = b.clone();
+                for (key, value) in o {
+                    let merged = match out.get(key) {
+                        Some(existing) => merge(existing, value),
+                        None => value.clone(),
+                    };
+                    out.insert(key.clone(), merged);
+                }
+                Value::Object(out)
+            }
+            (_, overlay) => overlay.clone(),
+        }
+    }
+    let empty = json!({});
+    let global = merge(
+        base.get("global").unwrap_or(&empty),
+        overlay.get("global").unwrap_or(&empty),
+    );
+    json!({
+        "global": global,
+        "masks": overlay.get("masks").cloned().unwrap_or_else(|| json!([])),
+    })
 }
 
 /// Said when the model answered without calling a tool.
@@ -824,11 +920,53 @@ mod tests {
 
     #[test]
     fn the_render_text_counts_down_and_says_when_to_stop() {
-        let text = render_text(2, "m", "median 30 → 41", &["note".into()], 1);
+        let text = render_text(
+            2,
+            "exposure +0.30",
+            "m",
+            "median 30 → 41",
+            &["note".into()],
+            1,
+        );
         assert!(text.contains("Round 2"));
+        assert!(text.contains("The edit this render shows:\nexposure +0.30"));
         assert!(text.contains("1 more edit allowed"));
         assert!(text.contains("- note"));
-        assert!(render_text(3, "m", "", &[], 0).contains("call finish"));
-        assert!(render_text(0, "m", "", &[], 2).contains("round 0"));
+        assert!(render_text(3, "", "m", "", &[], 0).contains("call finish"));
+        assert!(render_text(0, "", "m", "", &[], 2).contains("round 0"));
+    }
+
+    #[test]
+    fn a_recipe_reads_back_as_its_non_zero_values() {
+        let text = recipe_text(&json!({
+            "global": {"exposure": 0.3, "contrast": 0, "hsl": {"green": {"saturation": 15}},
+                       "treatment": "black_and_white"},
+            "masks": [{"target": "sky", "adjustments": {"exposure": -0.3, "saturation": 0}}]
+        }));
+        assert!(text.contains("exposure +0.30"), "{text}");
+        assert!(!text.contains("contrast"), "{text}");
+        assert!(text.contains("hsl.green.saturation 15"), "{text}");
+        assert!(text.contains("treatment black_and_white"), "{text}");
+        assert!(text.contains("mask sky: exposure -0.3"), "{text}");
+        assert_eq!(recipe_text(&json!({"global": {}})), "(no global changes)");
+    }
+
+    #[test]
+    fn an_edit_merges_onto_the_style() {
+        let style = json!({"global": {"exposure": 0.9, "hsl": {"green": {"saturation": 10, "hue": 4}},
+                                      "vibrance": 12},
+                           "masks": []});
+        let edit = json!({"global": {"exposure": 0.6, "hsl": {"green": {"saturation": 15}}},
+                          "masks": [{"target": "sky", "adjustments": {"exposure": -0.2}}]});
+        let merged = merge_onto(&style, &edit);
+        assert_eq!(merged["global"]["exposure"], json!(0.6));
+        assert_eq!(
+            merged["global"]["vibrance"],
+            json!(12),
+            "the style's own value stays"
+        );
+        assert_eq!(merged["global"]["hsl"]["green"]["saturation"], json!(15));
+        assert_eq!(merged["global"]["hsl"]["green"]["hue"], json!(4));
+        assert_eq!(merged["masks"][0]["target"], json!("sky"));
     }
 }

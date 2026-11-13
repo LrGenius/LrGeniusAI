@@ -36,8 +36,9 @@ use lrg_providers::chat::{
     ToolSpec,
 };
 use lrg_providers::edit_loop::{
-    against_original, apply_edit_tool, finish_tool, opening_text, recipe_from_arguments,
-    render_text, starting_text, system_prompt, EditArguments, LoopSetup, APPLY_EDIT, FINISH, NUDGE,
+    against_original, apply_edit_tool, finish_tool, merge_onto, opening_text,
+    recipe_from_arguments, recipe_text, render_text, starting_text, system_prompt, EditArguments,
+    LoopSetup, APPLY_EDIT, FINISH, NUDGE,
 };
 
 use crate::edit_budget::{measure_and_apply, FaceReaders};
@@ -152,6 +153,10 @@ pub struct EditSession {
     original_tones: ToneStats,
     capture: CaptureConditions,
     pending: Pending,
+    /// The photographer's style, when the session started from it: every
+    /// edit the model sends is merged onto it, so what the model leaves out
+    /// keeps the style's value instead of falling back to the photo's own.
+    base: Option<Value>,
     /// Round 0 (the style) when there is one, then every edit in order.
     rounds: Vec<Round>,
     /// Edits the model applied (round 0 not counted).
@@ -434,6 +439,7 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<(String, S
         original_tones,
         capture,
         pending: Pending::Nothing,
+        base: None,
         rounds: Vec::new(),
         edits: 0,
         last_used: Instant::now(),
@@ -446,7 +452,7 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<(String, S
 
     let step = if let Some(style) = request.style_recipe {
         let (style, mut notes) = white_balance_into_global(style, file_kind);
-        let built = build(state, &session, style).await;
+        let built = build(state, &session, style.clone()).await;
         notes.extend(built.warnings.iter().cloned());
         if is_empty_table(&built.table) {
             // Nothing to show the model as round 0: go straight to the model.
@@ -465,6 +471,7 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<(String, S
             step.warnings.splice(0..0, notes);
             step
         } else {
+            session.base = Some(style);
             session.rounds.push(Round {
                 number: 0,
                 recipe: built.recipe.clone(),
@@ -577,7 +584,19 @@ pub async fn render(
             ))
         }
         Pending::Style { opening } => {
-            let text = render_text(0, &tones.describe(), &comparison, &lightroom_notes, left);
+            let applied = session
+                .rounds
+                .first()
+                .map(|r| recipe_text(&r.recipe))
+                .unwrap_or_default();
+            let text = render_text(
+                0,
+                &applied,
+                &tones.describe(),
+                &comparison,
+                &lightroom_notes,
+                left,
+            );
             let message = opening_message(session, &opening, Some((render_image, text)));
             session.messages.push(message);
         }
@@ -588,7 +607,19 @@ pub async fn render(
                 .map(|r| r.notes.clone())
                 .unwrap_or_default();
             notes.extend(lightroom_notes);
-            let text = render_text(session.edits, &tones.describe(), &comparison, &notes, left);
+            let applied = session
+                .rounds
+                .last()
+                .map(|r| recipe_text(&r.recipe))
+                .unwrap_or_default();
+            let text = render_text(
+                session.edits,
+                &applied,
+                &tones.describe(),
+                &comparison,
+                &notes,
+                left,
+            );
             let mut parts = vec![ChatPart::ToolResult(ToolResult {
                 call_id: call.id,
                 name: call.name,
@@ -728,6 +759,10 @@ async fn advance(state: &AppState, session: &mut EditSession) -> Result<Step, St
                     assessment,
                     notes: argument_notes,
                 } = recipe_from_arguments(&call.arguments);
+                let recipe = match &session.base {
+                    Some(base) => merge_onto(base, &recipe),
+                    None => recipe,
+                };
                 let mut built = build(state, session, recipe).await;
                 built.warnings.splice(0..0, argument_notes);
                 if is_empty_table(&built.table) {

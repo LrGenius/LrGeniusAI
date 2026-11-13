@@ -570,3 +570,27 @@ rows in `LuaOptions::EVIDENCE` carry the raw answers.
 - a variant that applies a wire golden unchanged (decoded with JSON.lua),
   still needed before the goldens are frozen;
 - the manual checks listed above.
+
+## Results: AI Edit retoucher, live (2026-11-13)
+
+**Lightroom Classic 16.0**, test catalog, Library module, the plugin from the
+checkout driving AI Edit's retoucher (`EditLoop.lua`) on Canon CR3 files: every
+round's table from the Lua writer (`LuaMode::Apply`, `LuaOptions::default()`)
+through `photo:applyDevelopSettings()`, then `photo:updateAISettings()`, with the
+photo's own corrections passed back raw (merged by `CorrectionSyncID`). Seven
+photos, cloud model Gemini 3.1 Pro and local Gemma 4 E4B (MLX).
+
+| Question | Result |
+|---|---|
+| AI masks the experiments had not covered | **Face skin** and **iris and pupil** (people parts, the preset form `MaskSubType` 3) and the landscape class **vegetation** (50005) were all computed on photos that show them, next to subject, sky and background |
+| The photo's own masks passed back raw | Kept and still computed ("Maske 1", a sky mask, on two photos), next to the new corrections |
+| Re-applying a correction with the same sync id, round after round | Replaced in place: three rounds left one `LrGenius · Sky`, never two |
+| `updateAISettings()` after each round | Every mask computed before the render (`needsUpdateAISettings` false), within the plugin's 30 s wait |
+| Taking the photo back (the plugin's *Discard*) | Every key the loop wrote returned to its starting value; with own masks, `MaskGroupBasedCorrections` = the own ones alone; **without, an empty list removed the loop's masks** |
+| White balance | `Custom` + `Temperature`/`Tint` on raw applied as written. A relative temperature a small model sent for a raw file was dropped by the recipe builder and reported |
+
+Not covered: a non-raw file (the catalog held none), a straightened or cropped
+portrait, Lightroom before 16.0. The `LuaOptions::EVIDENCE` rows still describe the
+experiments alone; this run supports `mask_form` for people parts and landscape
+classes without changing the writer.
+
