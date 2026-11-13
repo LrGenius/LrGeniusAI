@@ -26,8 +26,19 @@ ARG CUDA_VERSION=12.6.3
 # Ubuntu 24.04, because the ONNX Runtime libraries ort-sys links need glibc
 # 2.38+ (see the trixie note below); 22.04 has 2.35.
 ARG UBUNTU_VERSION=24.04
+# Held at 1.99 because Cargo 1.100 moved build-script output one directory
+# deeper (target/release/build/<crate>/<hash>/out instead of
+# build/<crate>-<hash>/out), and two things here assume the old layout:
+# llama-cpp-sys-2's build.rs (up to 0.1.161) finds the target dir by walking
+# three levels up from OUT_DIR, and then panics hard-linking its shared libs
+# into a deps/ directory that is not there; and the library collection in
+# the build stage below globs build/llama-cpp-sys-2-*/out. Before moving
+# this on, check that llama-cpp-sys-2's get_cargo_target_dir() copes with the
+# new layout, and update that glob. .github/workflows/release.yml holds the
+# Windows build at the same version for the same reason.
+ARG RUST_VERSION=1.99
 
-FROM rust:1-trixie AS rust-toolchain
+FROM rust:${RUST_VERSION}-trixie AS rust-toolchain
 
 # --- Build environment, one per LLAMACPP value -----------------------------
 

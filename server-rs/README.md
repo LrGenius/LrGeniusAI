@@ -649,8 +649,10 @@ the variable and answers only to the API call. See the doc comment on
 ## Docker
 
 `Dockerfile` here builds and ships the compiled binary (multi-stage:
-`rust:1-trixie` builder, `debian:trixie-slim` runtime; trixie because the
-ONNX Runtime libraries need glibc 2.38+). Model files live in the `/models`
+`rust:1.99-trixie` builder, `debian:trixie-slim` runtime; trixie because the
+ONNX Runtime libraries need glibc 2.38+, and Rust held at 1.99 because
+llama.cpp's build breaks on Cargo 1.100's build-dir layout — see the
+`RUST_VERSION` note in the Dockerfile). Model files live in the `/models`
 volume: the Dockerfile points every family's env var above there
 (`/models/siglip2/...`, `/models/face/...`, `/models/bioclip/...`,
 `/models/llm`), which is where the plug-in's *Download AI models* puts them —
