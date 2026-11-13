@@ -6,6 +6,7 @@ pub mod clip;
 pub mod cull_taste;
 pub mod db;
 pub mod edit;
+pub mod edit_session;
 pub mod face_recognizer;
 pub mod faces;
 pub mod find_similar;

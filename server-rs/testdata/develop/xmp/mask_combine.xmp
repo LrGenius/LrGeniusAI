@@ -1,0 +1,87 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:ProcessVersion="15.4">
+   <crs:MaskGroupBasedCorrections>
+    <rdf:Seq>
+     <rdf:li>
+      <rdf:Description
+       crs:What="Correction"
+       crs:CorrectionAmount="1"
+       crs:CorrectionActive="true"
+       crs:CorrectionName="Correction 1"
+       crs:CorrectionSyncID="00000000000000000000000000001001"
+       crs:LocalExposure2012="0.125">
+      <crs:CorrectionMasks>
+       <rdf:Seq>
+        <rdf:li
+         crs:What="Mask/Image"
+         crs:MaskActive="true"
+         crs:MaskName="Mask 1"
+         crs:MaskBlendMode="0"
+         crs:MaskInverted="false"
+         crs:MaskSyncID="00000000000000000000000000001002"
+         crs:MaskValue="1"
+         crs:MaskVersion="1"
+         crs:MaskSubType="1"/>
+        <rdf:li
+         crs:What="Mask/Image"
+         crs:MaskActive="true"
+         crs:MaskName="Mask 2"
+         crs:MaskBlendMode="1"
+         crs:MaskInverted="false"
+         crs:MaskSyncID="00000000000000000000000000001003"
+         crs:MaskValue="0"
+         crs:MaskVersion="1"
+         crs:MaskSubType="2"/>
+        <rdf:li>
+         <rdf:Description
+          crs:What="Mask/RangeMask"
+          crs:MaskActive="true"
+          crs:MaskName="Mask 3"
+          crs:MaskBlendMode="1"
+          crs:MaskInverted="true"
+          crs:MaskSyncID="00000000000000000000000000001004"
+          crs:MaskValue="0">
+         <crs:CorrectionRangeMask
+          crs:Version="3"
+          crs:Type="2"
+          crs:Invert="false"
+          crs:SampleType="0"
+          crs:LumRange="0.500000 0.600000 1.000000 1.000000"/>
+         </rdf:Description>
+        </rdf:li>
+       </rdf:Seq>
+      </crs:CorrectionMasks>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description
+       crs:What="Correction"
+       crs:CorrectionAmount="1"
+       crs:CorrectionActive="true"
+       crs:CorrectionName="Correction 2"
+       crs:CorrectionSyncID="00000000000000000000000000001005"
+       crs:LocalExposure2012="-0.1">
+      <crs:CorrectionMasks>
+       <rdf:Seq>
+        <rdf:li
+         crs:What="Mask/Image"
+         crs:MaskActive="true"
+         crs:MaskName="Mask 4"
+         crs:MaskBlendMode="0"
+         crs:MaskInverted="true"
+         crs:MaskSyncID="00000000000000000000000000001006"
+         crs:MaskValue="1"
+         crs:MaskVersion="1"
+         crs:MaskSubType="1"/>
+       </rdf:Seq>
+      </crs:CorrectionMasks>
+      </rdf:Description>
+     </rdf:li>
+    </rdf:Seq>
+   </crs:MaskGroupBasedCorrections>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

@@ -24,7 +24,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 ## ✨ Core Features
 
 - **🤖 AI-Powered Tagging & Describing:** Uses advanced LLMs to accurately recognize image content, generate metadata, and provide detailed descriptions of your photos.
-- **🎛️ AI Lightroom Edit (Develop) *(beta)*:** Generates a Lightroom edit recipe per photo and applies it in Develop, either to the photo itself or to a new virtual copy. No language model is involved: the recipe is interpolated from the edits you saved yourself (see *Style Training*), so at least five training examples are required. Per-photo review is on by default.
+- **🎛️ AI Lightroom Edit (Develop) *(beta)*:** Edits each photo and applies the result as ordinary develop settings, to the photo itself or to a new virtual copy. The **AI retoucher** works like a person at the Develop panel: a vision model edits, Lightroom renders the edit, the model looks at the render with its measurements and corrects it — with looks (natural, moody, cinematic, film, black & white, …), your own instructions, and Lightroom's AI masks for sky, subject, background, skin, eyes and more. With five or more saved edits it starts from your own style and only fixes what does not suit the frame. **My style only** needs no language model at all: the recipe is interpolated from the edits you saved yourself (see *Style Training*). Per-photo review is on by default.
 - **🔍 Semantic Free-Text Search (Advanced Search):** Find images naturally through descriptive queries (e.g., *"Red sports car parked in front of a garage"* or *"Sunset over the mountains"*). LrGeniusAI automatically creates a relevance-sorted Collection in Lightroom based on your prompt.
 - **📸 Image Culling *(beta)*:** Group similar photos into bursts or near-duplicate stacks, automatically pick the strongest frames, and create Lightroom collections for picks, alternates, reject candidates, and optional duplicates.
 - **👥 People & Faces:** Detect and cluster faces, assign names to persons, browse person collections, and find similar faces across your catalog.
@@ -59,13 +59,13 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 4. **Pick an AI model.** Either enter a cloud API key in the **Plug-in Manager**, or stay fully local: the **Local AI Model** section offers a curated list of vision models (Gemma 4, Ministral 3, Qwen3-VL, Qwen2.5-VL) — choose one and click *Download*. The section shows the engine your platform ships: **MLX** on macOS, **llama.cpp** on Windows. See [Local AI Models](https://github.com/LrGenius/LrGeniusAI/wiki/Help-Local-AI-Models).
 5. Select photos in the library and choose one of the AI actions from **Library -> Plug-in Extras**:
    - **Analyze & Index Photos...** — AI tagging, descriptions, search index, faces, and optional species identification
-   - **AI Edit Photos...** *(beta)* — generate and apply Lightroom develop edits learned from your own edits
+   - **AI Edit Photos...** *(beta)* — an AI retoucher edits, looks at the result and refines it; or apply edits learned from your own
    - **Advanced Search...** — semantic free-text search
    - **Cull Similar Photos...** *(beta)* — burst grouping and auto-ranking
    - **People...** — face clusters and named person collections
    - **Find Similar Images...** — find near-duplicates or visually similar photos
    - **Deduplicate Keyword Synonyms...** — clean up synonym sprawl in your catalog (in the **Help** menu)
-6. For AI Edit, first teach it your style: edit a few photos by hand and run **Save Edits as AI Training Examples...** (in the **Help** menu). AI Edit builds every recipe from those examples and needs at least five of them — it calls no LLM. Keep **Review each proposed edit before applying it** enabled while you validate the results.
+6. For AI Edit, pick a vision model for the **AI retoucher** in its dialog (larger models edit better). To have it keep your own look, edit a few photos by hand and run **Save Edits as AI Training Examples...** (in the **Help** menu); with five or more it starts from your style, and **My style only** uses nothing else. Keep **Review each edit** enabled while you validate the results.
 
 *For comprehensive details, model setup guides, and tips, please visit [lrgenius.com/help](http://lrgenius.com/help/).*
 

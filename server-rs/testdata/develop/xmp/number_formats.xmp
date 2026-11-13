@@ -1,0 +1,52 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:Version="18.5"
+   crs:CompatibleVersion="251920384"
+   crs:ProcessVersion="15.4"
+   crs:WhiteBalance="Custom"
+   crs:Temperature="5500"
+   crs:Tint="+6"
+   crs:Exposure2012="+1.35"
+   crs:Contrast2012="-12"
+   crs:Highlights2012="-40"
+   crs:Shadows2012="+35"
+   crs:Whites2012="0"
+   crs:Blacks2012="-5"
+   crs:Texture="+8"
+   crs:Clarity2012="+10"
+   crs:Dehaze="+4"
+   crs:Vibrance="+20"
+   crs:Saturation="-5"
+   crs:Sharpness="40"
+   crs:SharpenRadius="+1.0"
+   crs:SharpenDetail="25"
+   crs:PostCropVignetteAmount="-20"
+   crs:GrainAmount="10"
+   crs:PerspectiveRotate="-1.5"
+   crs:PerspectiveX="+0.50"
+   crs:ConvertToGrayscale="False"
+   crs:AutoLateralCA="1"
+   crs:LensProfileEnable="1"
+   crs:LensProfileSetup="LensDefaults"
+   crs:CameraProfile="Adobe Standard"
+   crs:ToneCurveName2012="Linear"
+   crs:HasSettings="True"
+   crs:CropTop="0.012345"
+   crs:CropLeft="0"
+   crs:CropBottom="0.987654"
+   crs:CropRight="1"
+   crs:CropAngle="-0.8"
+   crs:HasCrop="True">
+   <crs:LensBlur>
+    <rdf:Description
+     crs:Version="1"
+     crs:Active="true"
+     crs:BlurAmount="50"
+     crs:CatEyeAmount="0"
+     crs:HighlightsBoost="50"/>
+   </crs:LensBlur>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

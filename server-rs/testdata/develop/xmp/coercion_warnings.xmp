@@ -1,0 +1,42 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:ProcessVersion="15.4"
+   crs:Exposure2012="bright"
+   crs:Contrast2012="+12.5"
+   crs:WhiteBalance="Candlelight"
+   crs:LensProfileDigest="0000"
+   crs:LensProfileEnable="2">
+   <crs:ToneCurvePV2012>
+    <rdf:Seq>
+     <rdf:li>0, 0</rdf:li>
+     <rdf:li>half, 128</rdf:li>
+    </rdf:Seq>
+   </crs:ToneCurvePV2012>
+   <crs:MaskGroupBasedCorrections>
+    <rdf:Seq>
+     <rdf:li>
+      <rdf:Description
+       crs:What="Correction"
+       crs:CorrectionAmount="1"
+       crs:CorrectionName="Correction 1"
+       crs:LocalExposure2012="0.1">
+      <crs:CorrectionMasks>
+       <rdf:Seq>
+        <rdf:li
+         crs:What="Mask/Image"
+         crs:MaskName="Mask 1"
+         crs:MaskBlendMode="1"
+         crs:MaskInverted="false"
+         crs:MaskValue="1"
+         crs:MaskSubType="1.5"/>
+       </rdf:Seq>
+      </crs:CorrectionMasks>
+      </rdf:Description>
+     </rdf:li>
+    </rdf:Seq>
+   </crs:MaskGroupBasedCorrections>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

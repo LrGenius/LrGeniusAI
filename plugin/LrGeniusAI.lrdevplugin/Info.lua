@@ -140,6 +140,10 @@ return {
 			title = LOC("$$$/LrGeniusAI/Menu/DeduplicateKeywords=Deduplicate Keyword Synonyms..."),
 			file = "TaskDeduplicateKeywords.lua",
 		},
+		{
+			title = "Developer: Run Develop-Settings Experiments...",
+			file = "TaskDevelopExperiments.lua",
+		},
 	},
 
 	LrShutdownApp = "ShutdownApp.lua",

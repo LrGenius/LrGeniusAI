@@ -54,6 +54,8 @@ Welcome to the project wiki.
 - [Dev: Culling — what the other tools judge](Dev-Image-Culling-Competitive-Analysis) — Lightroom, Aftershoot, Narrative, FilterPixel, Imagen, Excire, Evoto
 - [Dev: Culling — the public benchmark](Dev-Image-Culling-Benchmark) — defects made on purpose on free-licence photos, and what it measured
 - [Dev: Capture One Port — Findings and Plan](Dev-Capture-One-Port-Plan) — what Capture One can and cannot do; investigated 2026-09-10, not pursued
+- [Dev: AI Edit via XMP — Findings and Experiments](Dev-AI-Edit-XMP-Findings) — what `crs:` XMP can express, mask coordinate frames, SDK apply paths, and the in-Lightroom experiments that settle the rest; researched 2026-09-26
+- [Dev: Native Develop Model](Dev-Develop-Model) — `lrg-develop`: the key registry, the typed develop model, the policy filter and the Lua/JSON reader; how to add a key
 
 ### Auto-generated from README files
 
@@ -68,7 +70,7 @@ Welcome to the project wiki.
 LrGeniusAI is an AI extension for Lightroom Classic. It runs a local backend server and connects it to the Lightroom plugin to provide:
 
 - **AI metadata generation** — keywords, titles, captions, alt text, via cloud APIs or models the backend runs locally itself
-- **AI develop edits** *(beta)* — per-photo Lightroom develop recipes interpolated from your own saved edits, no LLM involved
+- **AI develop edits** *(beta)* — an AI retoucher that edits, looks at Lightroom's render and corrects it, with looks, your own instructions and AI masks; or recipes interpolated from your own saved edits, with no LLM involved
 - **Semantic free-text search** — find photos by describing them in natural language
 - **Species identification** — name the animals, plants and fungi in your photos down to species, on your own machine, with no cloud account
 - **Image culling** *(beta)* — burst grouping, scoring, Picks/Alternates/Rejects collections

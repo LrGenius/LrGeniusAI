@@ -83,33 +83,11 @@ fn normalize_temperature(value: Option<&Value>, is_raw: Option<bool>) -> Option<
     Some(clamped)
 }
 
-/// Apply [`normalize_temperature`] to an already-built recipe's `global` block.
-///
-/// For recipes that never went through [`normalize_edit_recipe`] — the style
-/// engine interpolates stored develop settings directly, and those carry
-/// whatever scale the training photos used. Returns true when the value was
-/// dropped, so the caller can say so.
-pub fn sanitize_recipe_temperature(recipe: &mut Value, is_raw: Option<bool>) -> bool {
-    let Some(global) = recipe.get_mut("global").and_then(Value::as_object_mut) else {
-        return false;
-    };
-    if !global.contains_key("temperature") {
-        return false;
-    }
-    match normalize_temperature(global.get("temperature"), is_raw) {
-        Some(t) => {
-            global.insert("temperature".into(), json!(t));
-            false
-        }
-        None => {
-            global.remove("temperature");
-            true
-        }
-    }
-}
-
+/// Local (mask) adjustment ranges in Lightroom's slider units. Exposure is
+/// ±4 EV, not the global ±5: a mask stores `LocalExposure2012` as EV / 4 on
+/// -1..1 (the registry test below keeps these in step with `lrg-develop`).
 const MASK_ADJUSTMENT_RANGES: &[(&str, (f64, f64))] = &[
-    ("exposure", (-5.0, 5.0)),
+    ("exposure", (-4.0, 4.0)),
     ("contrast", (-100.0, 100.0)),
     ("highlights", (-100.0, 100.0)),
     ("shadows", (-100.0, 100.0)),
@@ -1376,15 +1354,94 @@ mod tests {
         assert_eq!(relative["maximum"], 100.0);
     }
 
+    /// Every range the LLM schema declares for a key the develop registry
+    /// knows must be the registry's UI range. The registry is the one place
+    /// the ranges are established; a drift here means the model is asked for
+    /// values Lightroom does not take (or never offered ones it does).
     #[test]
-    fn the_style_engine_recipe_is_sanitized_in_place() {
-        let mut recipe = json!({"global": {"temperature": 5600, "contrast": 20}});
-        assert!(sanitize_recipe_temperature(&mut recipe, Some(false)));
-        assert!(recipe["global"].get("temperature").is_none());
-        assert_eq!(recipe["global"]["contrast"], 20, "other fields untouched");
+    fn schema_ranges_match_the_develop_registry() {
+        use lrg_develop::registry::{self, to_ui, Level};
 
-        let mut raw_recipe = json!({"global": {"temperature": 5600}});
-        assert!(!sanitize_recipe_temperature(&mut raw_recipe, Some(true)));
-        assert_eq!(raw_recipe["global"]["temperature"], 5600.0);
+        fn ui_range(level: Level, name: &str) -> (f64, f64) {
+            let spec = registry::lookup(level, name)
+                .unwrap_or_else(|| panic!("{name} is not in the registry"))
+                .spec();
+            let (lo, hi) = spec.range.expect("a slider has a range");
+            (
+                to_ui(spec, lo).unwrap().get(),
+                to_ui(spec, hi).unwrap().get(),
+            )
+        }
+        fn declared(schema: &Value) -> (f64, f64) {
+            (
+                schema["minimum"].as_f64().unwrap(),
+                schema["maximum"].as_f64().unwrap(),
+            )
+        }
+
+        let raw = openai_edit_recipe_schema(Some(true));
+        let global = &raw["properties"]["global"]["properties"];
+        let mut checked = 0;
+        for (_, spec) in registry::iter() {
+            let Some(path) = spec.recipe_alias.and_then(|a| a.strip_prefix("global.")) else {
+                continue;
+            };
+            // `global.tone_curve.shadows` → properties.tone_curve.properties.shadows
+            let (parents, leaf) = path.rsplit_once('.').unwrap_or(("", path));
+            let parent = parents
+                .split('.')
+                .filter(|seg| !seg.is_empty())
+                .fold(global, |node, seg| &node[seg]["properties"]);
+            assert_eq!(
+                declared(&parent[leaf]),
+                ui_range(Level::Global, spec.name),
+                "global.{path} ({})",
+                spec.name
+            );
+            checked += 1;
+        }
+        assert!(checked >= 20, "only {checked} aliases checked");
+
+        // White balance: the schema's scale follows the target's file kind.
+        let relative = openai_edit_recipe_schema(Some(false));
+        let rel_global = &relative["properties"]["global"]["properties"];
+        assert_eq!(
+            declared(&global["temperature"]),
+            ui_range(Level::Global, "Temperature")
+        );
+        assert_eq!(declared(&global["tint"]), ui_range(Level::Global, "Tint"));
+        assert_eq!(
+            declared(&rel_global["temperature"]),
+            ui_range(Level::Global, "IncrementalTemperature")
+        );
+
+        // Masks: every local adjustment the schema offers.
+        let local_key = |field: &str| match field {
+            "exposure" => "LocalExposure2012",
+            "contrast" => "LocalContrast2012",
+            "highlights" => "LocalHighlights2012",
+            "shadows" => "LocalShadows2012",
+            "whites" => "LocalWhites2012",
+            "blacks" => "LocalBlacks2012",
+            "temperature" => "LocalTemperature",
+            "tint" => "LocalTint",
+            "texture" => "LocalTexture",
+            "clarity" => "LocalClarity2012",
+            "dehaze" => "LocalDehaze",
+            "saturation" => "LocalSaturation",
+            "sharpness" => "LocalSharpness",
+            "noise" => "LocalLuminanceNoise",
+            "moire" => "LocalMoire",
+            other => panic!("mask field {other} has no registry key in this test"),
+        };
+        let adjustments =
+            &raw["properties"]["masks"]["items"]["properties"]["adjustments"]["properties"];
+        for &(field, _) in MASK_ADJUSTMENT_RANGES {
+            assert_eq!(
+                declared(&adjustments[field]),
+                ui_range(Level::Correction, local_key(field)),
+                "masks[].adjustments.{field}"
+            );
+        }
     }
 }

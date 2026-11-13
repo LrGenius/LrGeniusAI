@@ -1,0 +1,74 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:ProcessVersion="15.4">
+   <crs:MaskGroupBasedCorrections>
+    <rdf:Seq>
+     <rdf:li rdf:parseType="Resource">
+      <crs:What>Correction</crs:What>
+      <crs:CorrectionAmount>1</crs:CorrectionAmount>
+      <crs:CorrectionActive>true</crs:CorrectionActive>
+      <crs:CorrectionName>Correction 1</crs:CorrectionName>
+      <crs:CorrectionSyncID>00000000000000000000000000000F01</crs:CorrectionSyncID>
+      <crs:LocalShadows2012>0.2</crs:LocalShadows2012>
+      <crs:CorrectionMasks>
+       <rdf:Seq>
+        <rdf:li rdf:parseType="Resource">
+         <crs:What>Mask/RangeMask</crs:What>
+         <crs:MaskActive>true</crs:MaskActive>
+         <crs:MaskName>Mask 1</crs:MaskName>
+         <crs:MaskBlendMode>0</crs:MaskBlendMode>
+         <crs:MaskInverted>false</crs:MaskInverted>
+         <crs:MaskSyncID>00000000000000000000000000000F02</crs:MaskSyncID>
+         <crs:MaskValue>1</crs:MaskValue>
+         <crs:CorrectionRangeMask rdf:parseType="Resource">
+          <crs:Version>3</crs:Version>
+          <crs:Type>2</crs:Type>
+          <crs:Invert>false</crs:Invert>
+          <crs:SampleType>0</crs:SampleType>
+          <crs:LumRange>0.000000 0.100000 0.350000 0.500000</crs:LumRange>
+          <crs:LuminanceDepthSampleInfo>0.250000 0.200000 0.300000</crs:LuminanceDepthSampleInfo>
+         </crs:CorrectionRangeMask>
+        </rdf:li>
+       </rdf:Seq>
+      </crs:CorrectionMasks>
+     </rdf:li>
+     <rdf:li rdf:parseType="Resource">
+      <crs:What>Correction</crs:What>
+      <crs:CorrectionAmount>1</crs:CorrectionAmount>
+      <crs:CorrectionActive>true</crs:CorrectionActive>
+      <crs:CorrectionName>Correction 2</crs:CorrectionName>
+      <crs:CorrectionSyncID>00000000000000000000000000000F03</crs:CorrectionSyncID>
+      <crs:LocalSaturation>-0.3</crs:LocalSaturation>
+      <crs:CorrectionMasks>
+       <rdf:Seq>
+        <rdf:li rdf:parseType="Resource">
+         <crs:What>Mask/RangeMask</crs:What>
+         <crs:MaskActive>true</crs:MaskActive>
+         <crs:MaskName>Mask 2</crs:MaskName>
+         <crs:MaskBlendMode>0</crs:MaskBlendMode>
+         <crs:MaskInverted>false</crs:MaskInverted>
+         <crs:MaskSyncID>00000000000000000000000000000F04</crs:MaskSyncID>
+         <crs:MaskValue>1</crs:MaskValue>
+         <crs:CorrectionRangeMask rdf:parseType="Resource">
+          <crs:Version>3</crs:Version>
+          <crs:Type>1</crs:Type>
+          <crs:ColorAmount>0.494949</crs:ColorAmount>
+          <crs:Invert>false</crs:Invert>
+          <crs:SampleType>0</crs:SampleType>
+          <crs:PointModels>
+           <rdf:Seq>
+            <rdf:li>0.255405 0.034566 0.419137 0.692175 0.651248 0</rdf:li>
+           </rdf:Seq>
+          </crs:PointModels>
+         </crs:CorrectionRangeMask>
+        </rdf:li>
+       </rdf:Seq>
+      </crs:CorrectionMasks>
+     </rdf:li>
+    </rdf:Seq>
+   </crs:MaskGroupBasedCorrections>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

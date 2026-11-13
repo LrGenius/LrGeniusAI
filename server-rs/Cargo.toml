@@ -14,6 +14,7 @@ members = [
     "crates/lrg-mcp",
     "crates/lrg-chat",
     "crates/lrg-server",
+    "crates/lrg-develop",
 ]
 
 [workspace.package]
@@ -32,6 +33,7 @@ lrg-providers = { path = "crates/lrg-providers" }
 lrg-llama = { path = "crates/lrg-llama" }
 lrg-mlx = { path = "crates/lrg-mlx" }
 lrg-api = { path = "crates/lrg-api" }
+lrg-develop = { path = "crates/lrg-develop" }
 lrg-mcp = { path = "crates/lrg-mcp" }
 lrg-chat = { path = "crates/lrg-chat" }
 
