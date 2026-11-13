@@ -4,6 +4,7 @@
 pub mod agent_bridge;
 pub mod api_auth;
 pub mod edit_budget;
+pub mod edit_loop;
 #[cfg(test)]
 mod fake_release;
 pub mod hf_repo;
@@ -57,6 +58,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::find_similar::router())
         .merge(routes::group_similar::router())
         .merge(routes::edit::router())
+        .merge(routes::edit_session::router())
         .merge(routes::training::router())
         .merge(routes::keywords::router())
         .merge(routes::llm::router())

@@ -73,10 +73,17 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 
 ### AI Develop Edits
 
-- Generate a Develop recipe per photo and apply it non-destructively, either to
-  the photo itself or to a virtual copy
-- No LLM involved: the backend matches the photo against the edits you saved
-  yourself and interpolates theirs
+- Edit each photo and apply the result non-destructively, either to the photo
+  itself or to a virtual copy
+- **AI retoucher**: a vision model edits, Lightroom renders the edit, the model
+  looks at the render with its measurements and corrects it, round by round
+  (`EditLoop.lua` with the backend's `/v1/edit/sessions`). Looks, your own
+  instructions, and Lightroom's AI masks (subject, sky, background, people
+  parts, landscape classes; Lightroom Classic 15.3+), applied through
+  `applyDevelopSettings` and `updateAISettings`
+- **My style only**: no AI model; the backend matches the photo against the
+  edits you saved yourself and interpolates theirs. The retoucher can start
+  from this blend and only fix what does not suit the frame
 - Recipes are constrained to what the frame can take: the backend measures the
   image and caps contrast, clarity, shadow lift and whites accordingly, and
   reports why
@@ -84,7 +91,8 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 ### Style Training
 
 - Save your own Develop settings as labeled training examples
-- The sole input to AI Develop Edits, which needs at least five of them
+- The sole input to *My style only*, which needs at least five of them, and the
+  AI retoucher's optional starting point
 
 ### Keyword Dedup & Declutter
 

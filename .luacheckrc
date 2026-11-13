@@ -4,6 +4,7 @@ std = "lua51"
 globals = {
     "import",
     "AestheticRefine",
+    "EditLoop",
     "AgentBridge",
     "AgentCommands",
     "PluginTests",

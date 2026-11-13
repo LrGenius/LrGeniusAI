@@ -18,7 +18,8 @@ develop-preset writer, the Lua writer for `applyDevelopSettings` (provisional
 until experiments E1/E2/E4/E11) and correction builders; a leaf crate),
 `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
 `lrg-mlx` (supervises the Apple silicon MLX sidecar), `lrg-api` (axum
-routers, including the agent bridge to the plugin), `lrg-mcp` (the MCP endpoint
+routers, including the agent bridge to the plugin and AI Edit's retoucher
+sessions at `/v1/edit/sessions`), `lrg-mcp` (the MCP endpoint
 AI agents connect to at `/mcp`, and the `geniusai-server mcp` stdio proxy —
 see [`docs/wiki/Dev-Agent-Bridge.md`](../docs/wiki/Dev-Agent-Bridge.md)),
 `lrg-chat` (the in-app agent chat at `/v1/chat/*` and its page, a local or
@@ -31,7 +32,9 @@ providers. They are independent — a build can have either, both, or neither �
 and both are served by the same `LocalEngine` trait in
 `lrg-providers/src/local.rs`. Besides indexing photos in batches
 (`generate`), the trait answers a whole conversation with one turn,
-streaming its text as it is decoded (`chat`) — the agent chat is built on that.
+streaming its text as it is decoded (`chat`) — the agent chat is built on that,
+and so is AI Edit's retoucher, which edits through two tools (`apply_edit`,
+`finish`) and sees each of Lightroom's renders as a tool result.
 The chat itself talks to a model-neutral `ChatModel` (`lrg-providers/src/chat.rs`);
 `local_chat.rs` puts a local engine behind it, calling tools by decoding
 against a JSON Schema with one branch per tool, since llama.cpp cannot render

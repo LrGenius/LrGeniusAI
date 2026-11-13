@@ -235,6 +235,7 @@ local ENDPOINTS = {
 	EDIT_BASE64 = "/v1/edit/recipe/base64",
 	STYLE_EDIT = "/v1/edit/style",
 	EDIT_SCORE = "/v1/edit/score",
+	EDIT_SESSIONS = "/v1/edit/sessions", -- suffix /<session_id>/render; DELETE /<session_id>
 	TRAINING_ADD = "/v1/edit/training",
 	TRAINING_LIST = "/v1/edit/training",
 	TRAINING_CLEAR = "/v1/edit/training", -- DELETE /v1/edit/training (all)
@@ -6086,6 +6087,104 @@ function SearchIndexAPI.scoreEditedPhoto(filepath)
 		return score, nil
 	end
 	return nil, response.error or "Unexpected response"
+end
+
+---
+-- Opens an AI Edit retoucher session for one photo (`POST /v1/edit/sessions`).
+--
+-- The backend holds the conversation with the AI model; the answer is the
+-- first step: a develop table to apply, or the photographer's style as round
+-- 0 when `fields.style_recipe` is set. See EditLoop.lua.
+-- @param photoId string
+-- @param filepath string The photo rendered as it is now.
+-- @param fields table Text fields: provider, model, api_key, server_url,
+--   look, instructions, language, max_edits, masks, is_raw, develop_settings
+--   (JSON), style_recipe (JSON), the llm_* engine settings.
+-- @return boolean ok, table|string the step, or what went wrong.
+---
+function SearchIndexAPI.startEditSession(photoId, filepath, fields)
+	if not photoId or photoId == "" then
+		return false, "No photo ID provided"
+	end
+	if not filepath or not LrFileUtils.exists(filepath) then
+		return false, "No rendered image to start from"
+	end
+	local mimeChunks = { { name = "photo_id", value = photoId } }
+	local catalogId = getCatalogId()
+	if catalogId then
+		table.insert(mimeChunks, { name = "catalog_id", value = catalogId })
+	end
+	for key, value in pairs(fields or {}) do
+		if value ~= nil and tostring(value) ~= "" then
+			table.insert(mimeChunks, { name = key, value = tostring(value) })
+		end
+	end
+	table.insert(mimeChunks, {
+		name = "image",
+		fileName = LrPathUtils.leafName(filepath),
+		filePath = filepath,
+		contentType = "image/jpeg",
+	})
+	-- A local model can take minutes for one answer.
+	local response, err = _requestMultipart(SearchIndexAPI.url("EDIT_SESSIONS"), mimeChunks, 900)
+	if not response then
+		return false, err or "Unknown error"
+	end
+	if response.status == "success" then
+		return true, response
+	end
+	return false, response.error or "Unexpected response"
+end
+
+---
+-- Hands the render of the last step back to the session and gets the next
+-- step (`POST /v1/edit/sessions/{id}/render`).
+-- @param sessionId string
+-- @param filepath string The photo rendered with the step applied.
+-- @param notes table|nil What Lightroom saw while applying it (an AI mask that
+--   found nothing), told to the model.
+-- @return boolean ok, table|string the next step, or what went wrong.
+---
+function SearchIndexAPI.sendEditRender(sessionId, filepath, notes)
+	if not filepath or not LrFileUtils.exists(filepath) then
+		return false, "No rendered image to send"
+	end
+	local mimeChunks = {}
+	if type(notes) == "table" and #notes > 0 then
+		table.insert(mimeChunks, { name = "lightroom_notes", value = JSON:encode(notes) })
+	end
+	table.insert(mimeChunks, {
+		name = "image",
+		fileName = LrPathUtils.leafName(filepath),
+		filePath = filepath,
+		contentType = "image/jpeg",
+	})
+	local url = SearchIndexAPI.url("EDIT_SESSIONS", sessionId, "render")
+	local response, err = _requestMultipart(url, mimeChunks, 900)
+	if not response then
+		return false, err or "Unknown error"
+	end
+	if response.status == "success" then
+		return true, response
+	end
+	return false, response.error or "Unexpected response"
+end
+
+---
+-- Ends an AI Edit session early (`DELETE /v1/edit/sessions/{id}`). Ending one
+-- that has already ended is not an error.
+-- @param sessionId string
+-- @return boolean ok, string|nil error
+---
+function SearchIndexAPI.endEditSession(sessionId)
+	if not sessionId then
+		return true, nil
+	end
+	local response, err = _request("DELETE", SearchIndexAPI.url("EDIT_SESSIONS", sessionId), nil, 30)
+	if not response then
+		return false, err or "Unknown error"
+	end
+	return response.status == "success", response.error
 end
 
 --- Sends the update manifest and plugin path to the backend to perform a code-only update.

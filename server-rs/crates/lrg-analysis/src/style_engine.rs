@@ -15,7 +15,8 @@ use lrg_develop::{FileKind, Finite};
 use serde_json::{json, Map, Value};
 
 use crate::training::{
-    canonical_key, canonical_keys, number_json, white_balance_json, CanonicalKey,
+    canonical_key, canonical_keys, number_json, white_balance_from_json, white_balance_json,
+    CanonicalKey,
 };
 
 pub const WEIGHT_CLIP: f64 = 0.50;
@@ -929,6 +930,46 @@ pub fn confidence_warning(confidence: f64) -> Option<String> {
     }
 }
 
+/// A style recipe in the shape `lrg_develop::build::recipe` reads: its
+/// `white_balance` (mode, family, numbers) moved into `global.temperature`
+/// and `global.tint`, or dropped with a note when it cannot go onto a photo
+/// of `file_kind` — learned on the other family's scale, or a named mode
+/// without numbers.
+///
+/// AI Edit's retoucher applies the style as its round 0 through the recipe
+/// builder, which knows only the global numbers.
+pub fn white_balance_into_global(
+    mut recipe: Value,
+    file_kind: Option<FileKind>,
+) -> (Value, Vec<String>) {
+    let mut notes = Vec::new();
+    let Some(raw) = recipe
+        .as_object_mut()
+        .and_then(|r| r.remove("white_balance"))
+    else {
+        return (recipe, notes);
+    };
+    let usable = white_balance_from_json(&raw)
+        .filter(|wb| wb.mode == WbMode::Custom && Some(FileKind::from(wb.family)) == file_kind);
+    let Some(wb) = usable else {
+        notes.push(
+            "Your style's white balance was not carried over: it was learned on another kind of \
+             file than this one."
+                .to_string(),
+        );
+        return (recipe, notes);
+    };
+    if let Some(global) = recipe.get_mut("global").and_then(Value::as_object_mut) {
+        if let Some(t) = wb.temperature {
+            global.insert("temperature".to_string(), json!(t.get()));
+        }
+        if let Some(t) = wb.tint {
+            global.insert("tint".to_string(), json!(t.get()));
+        }
+    }
+    (recipe, notes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1647,5 +1688,24 @@ mod tests {
             assert!(!w.chars().any(|ch| ch.is_ascii_digit()), "{w}");
         }
         assert_eq!(confidence_warning(CONFIDENCE_GOOD), None);
+    }
+
+    #[test]
+    fn the_style_white_balance_moves_into_global_or_goes() {
+        let style = json!({"global": {"exposure": 0.2},
+                           "white_balance": {"mode": "Custom", "family": "raw",
+                                             "temperature": 5400, "tint": 8}});
+        let (recipe, notes) = white_balance_into_global(style.clone(), Some(FileKind::Raw));
+        assert!(notes.is_empty());
+        assert_eq!(recipe["global"]["temperature"], json!(5400.0));
+        assert_eq!(recipe["global"]["tint"], json!(8.0));
+        assert!(recipe.get("white_balance").is_none());
+
+        let (recipe, notes) = white_balance_into_global(style, Some(FileKind::NonRaw));
+        assert_eq!(notes.len(), 1);
+        assert!(recipe["global"].get("temperature").is_none());
+
+        let (_, notes) = white_balance_into_global(json!({"global": {}}), None);
+        assert!(notes.is_empty(), "no white balance, nothing to say");
     }
 }

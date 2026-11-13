@@ -98,6 +98,9 @@ pub struct AppState {
     /// Keeps the computer awake while index batches run; released by
     /// `run_maintenance` once indexing has stopped. See [`crate::keep_awake`].
     pub keep_awake: Arc<crate::keep_awake::KeepAwake>,
+    /// AI Edit's retoucher sessions in flight, one per photo being edited.
+    /// See [`crate::edit_loop`].
+    pub edit_sessions: crate::edit_loop::EditSessions,
 }
 
 /// Where the three ONNX model families live on disk.
@@ -173,6 +176,7 @@ impl AppState {
             relaunch_after_shutdown: StdMutex::new(None),
             species_links: Arc::new(crate::species_links::LinkResolver::new()),
             keep_awake: Arc::default(),
+            edit_sessions: crate::edit_loop::EditSessions::default(),
         }
     }
 

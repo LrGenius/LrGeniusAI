@@ -63,6 +63,8 @@ sources = [
   # Likewise the agent bridge behind /v1/agent/*, and the /mcp endpoint.
   "server-rs/crates/lrg-api/src/agent_bridge.rs",
   "server-rs/crates/lrg-mcp/src/lib.rs",
+  # The /v1/edit/sessions section documents the session lifecycle and steps.
+  "server-rs/crates/lrg-api/src/edit_loop.rs",
   # The agent chat's routes, merged at the root beside /mcp.
   "server-rs/crates/lrg-chat/src/routes.rs",
   # The page names the release tags the download routes pull assets from, so a
@@ -140,12 +142,18 @@ sources = [
 
 [page."Help-AI-Edit.md"]
 # `routes/edit.rs` is deliberately absent: the plugin no longer reaches the
-# LLM edit path, so the page documents the style engine only.
+# single-shot LLM edit path. The retoucher loop is documented here from its
+# prompt and tools (lrg-providers), its sessions (lrg-api) and its Lightroom
+# side (EditLoop.lua).
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskAiEditPhotos.lua",
+  "plugin/LrGeniusAI.lrdevplugin/EditLoop.lua",
   "plugin/LrGeniusAI.lrdevplugin/AestheticRefine.lua",
   "plugin/LrGeniusAI.lrdevplugin/DevelopEditManager.lua",
   "server-rs/crates/lrg-api/src/routes/style_edit.rs",
+  "server-rs/crates/lrg-api/src/edit_loop.rs",
+  "server-rs/crates/lrg-providers/src/edit_loop.rs",
+  "server-rs/crates/lrg-imaging/src/tone.rs",
   "server-rs/crates/lrg-analysis/src/style_engine.rs",
   "server-rs/crates/lrg-api/src/edit_budget.rs",
 ]

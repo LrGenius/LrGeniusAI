@@ -72,6 +72,7 @@
 
 mod gradient;
 mod range;
+pub mod recipe;
 mod semantic;
 
 use std::collections::BTreeMap;

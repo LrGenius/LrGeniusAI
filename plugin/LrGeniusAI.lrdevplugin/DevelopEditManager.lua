@@ -952,6 +952,19 @@ function DevelopEditManager.formatRecipeDetails(response)
 	return table.concat(lines, "\n")
 end
 
+--- The warning for a record persistEditRecipe could not write: one wording,
+-- so the run's summary counts every photo it hit under one entry.
+function DevelopEditManager.recordFailureWarning(err)
+	return "The AI Edit record on the photo could not be saved in the catalog (" .. tostring(err) .. ")."
+end
+
+---
+-- Records an edit on the photo's plug-in metadata (aiEditRecipe, aiEditSummary,
+-- ...), the catalog's own note of what AI Edit did.
+-- @return boolean ok, string|nil why the record could not be written. The
+--   edit itself is unaffected either way; callers report a failure as a
+--   warning, since a log line is not a report.
+---
 function DevelopEditManager.persistEditRecipe(photo, response, warnings, status)
 	log:trace("DevelopEditManager.persistEditRecipe: start status=" .. tostring(status))
 	local okRecipe, recipeOrErr = LrTasks.pcall(function()
@@ -959,12 +972,12 @@ function DevelopEditManager.persistEditRecipe(photo, response, warnings, status)
 	end)
 	if not okRecipe then
 		log:error("DevelopEditManager.persistEditRecipe: getRecipeFromResponse failed: " .. tostring(recipeOrErr))
-		return
+		return false, tostring(recipeOrErr)
 	end
 	local recipe = recipeOrErr
 	if not photo or not recipe then
 		log:error("DevelopEditManager.persistEditRecipe: missing photo or recipe")
-		return
+		return false, "no recipe to record"
 	end
 
 	log:trace("DevelopEditManager.persistEditRecipe: recipe resolved, building warnings")
@@ -1021,9 +1034,10 @@ function DevelopEditManager.persistEditRecipe(photo, response, warnings, status)
 	end)
 	if not okWrite then
 		log:error("DevelopEditManager.persistEditRecipe: catalog write failed: " .. tostring(writeErr))
-		return
+		return false, tostring(writeErr)
 	end
 	log:trace("DevelopEditManager.persistEditRecipe: done warningsCount=" .. tostring(#allWarnings))
+	return true, nil
 end
 
 -- `whiteBalanceFamily` is the photo's own family ("raw", "non_raw" or nil),
@@ -1946,7 +1960,10 @@ function DevelopEditManager.applyRecipe(photo, response, options)
 		applyMaskEdits(photo, recipe, warnings)
 	end
 
-	DevelopEditManager.persistEditRecipe(photo, response, warnings, "applied")
+	local recorded, recordErr = DevelopEditManager.persistEditRecipe(photo, response, warnings, "applied")
+	if not recorded then
+		appendWarning(warnings, DevelopEditManager.recordFailureWarning(recordErr))
+	end
 	log:trace(
 		"DevelopEditManager.applyRecipe: done globalApplied="
 			.. tostring(globalApplied)

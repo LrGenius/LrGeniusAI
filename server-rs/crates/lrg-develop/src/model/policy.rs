@@ -143,6 +143,35 @@ pub struct Skipped {
     pub reason: SkipReason,
 }
 
+impl Skipped {
+    /// The report as one sentence for a photographer (and for a model that
+    /// asked for the value): what was left out, and why in Lightroom's terms.
+    pub fn sentence(&self) -> String {
+        let why = match &self.reason {
+            SkipReason::Policy(_) => "it is not a setting an edit carries".to_string(),
+            SkipReason::Gate(_) => "a setting it depends on is off".to_string(),
+            SkipReason::ProcessVersion { min, .. } => format!(
+                "it needs process version {} or later, and the photo is older; update it \
+                 in Lightroom's Calibration panel to use it",
+                min.label().unwrap_or("a newer")
+            ),
+            SkipReason::FileKind(FileScope::RawOnly) => "it exists for raw files only".to_string(),
+            SkipReason::FileKind(FileScope::NonRawOnly) => {
+                "it exists for non-raw files only".to_string()
+            }
+            SkipReason::FileKind(FileScope::Both) => "it does not apply to this file".to_string(),
+            SkipReason::CameraRestricted { restriction } => {
+                format!("the profile is made for the {restriction} only")
+            }
+            SkipReason::Opaque => "Lightroom's own form of it cannot be rewritten".to_string(),
+            SkipReason::WhiteBalanceMode(mode) => {
+                format!("it would pin the white balance that \"{mode}\" resolved to")
+            }
+        };
+        format!("{} was not applied: {why}.", self.path)
+    }
+}
+
 /// [`DevelopSettings::split_by_frame_scope`]'s result: one settings value per
 /// [`FrameScope`], each with the source's file kind.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

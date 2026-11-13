@@ -33,8 +33,16 @@ Who uses it today:
   family.
 - `lrg-api` (`routes/training.rs`, `routes/style_edit.rs`) stores and re-reads
   that canonical form.
-- `lrg-providers` only in a test: every range the LLM recipe schema declares
-  for a registry key must equal the key's UI range.
+- `lrg-providers` builds AI Edit's retoucher tool schema (`edit_loop.rs`)
+  from `build::recipe`: the globals it offers, the mask targets and local
+  adjustments, each with the registry's UI range. A test still requires every
+  range the older LLM recipe schema (`edit_recipe.rs`) declares for a registry
+  key to equal the key's UI range.
+- `lrg-api` (`edit_loop.rs`) turns each of the retoucher's edits into the
+  table `applyDevelopSettings()` takes: `build::recipe::settings_from_recipe`,
+  then `lua::to_lua_value` in apply mode for the photo
+  ([From an edit recipe](#from-an-edit-recipe)). It is the first production
+  caller of the Lua writer.
 
 ## Layout
 
@@ -47,7 +55,7 @@ Who uses it today:
 | `xmp::read` | an XMP sidecar, preset or profile → `XmpDocument` (kind, header, model, warnings, skipped subtrees) |
 | `xmp::write` | model → a develop preset (`WriteMode::Preset`), or a lossless test rewrite (`WriteMode::TestRoundTrip`, feature `test-roundtrip`) |
 | `xmp::format` | how the writer spells numbers, booleans, curves, ids, versions; XML escaping |
-| `build` | `CorrectionBuilder`: new corrections from UI values and semantic, gradient and luminance-range components, with deterministic sync ids |
+| `build` | `CorrectionBuilder`: new corrections from UI values and semantic, gradient and luminance-range components, with deterministic sync ids; `build::recipe`: settings from an edit recipe (UI units, recipe aliases, semantic mask targets) and a photo's starting values back in that vocabulary |
 | `reader` (crate-private) | what both readers share: typing through the registry, closed sets and ids, curve points, file kind, process-version check, assembly |
 | `parse` | `ParseError` (input unusable) and `ParseWarning` (one value, reading went on) |
 
@@ -1182,6 +1190,37 @@ point colour (Adobe 17.4, ours 15.3, since we drop it) and 4 are Subject, Sky
 or people presets Adobe stamped 15.3 whose only difference from Adobe's own
 14.0/15.0 presets of the same content is `LocalCorrectedDepth`/`LocalGrain`
 at 0, which we do not write.
+
+### From an edit recipe
+
+`build::recipe::settings_from_recipe(&recipe, file_kind)` is how AI Edit's
+retoucher reaches Lightroom: the model edits in the recipe's vocabulary and this
+turns it into `DevelopSettings` for the Lua writer.
+
+- **Globals** at their recipe alias paths (`global.exposure`,
+  `global.hsl.red.hue`, ...), plus `EXTRA_GLOBALS`, which have no alias because
+  no training example teaches them: the colour-grading midtones, the three
+  luminances and blending, and the black-and-white mix. Values go through
+  `from_ui_value`; one outside the key's range is clamped and reported.
+- **White balance** (`global.temperature`/`tint`) goes into the photo's own
+  family with `WhiteBalance = "Custom"`. A number on the other family's scale
+  (Kelvin for a rendered file, an offset for a raw one) is dropped with a note,
+  never clamped; an unknown file kind gets no white balance.
+- **`treatment`** (`"black_and_white"`/`"color"`) sets `ConvertToGrayscale`.
+- **Masks** (`[{target, adjustments}]`): one correction per target from
+  `MASK_TARGETS` (subject, sky, background, the ten people parts in their preset
+  form, seven landscape classes — not the landscape sky, which `sky` already
+  is), built by `CorrectionBuilder` with the role as name (`LrGenius · Sky`).
+  Their sync ids follow from the role, so the same target in a later round
+  replaces the earlier correction. Adjustments are `LOCAL_ADJUSTMENTS`
+  (exposure in EV, the rest ±100). A second mask on one target, an unknown
+  target or a mask without a non-zero adjustment is left out; the first two
+  with a note.
+
+`starting_values(&settings)` is the way back for telling the model where a
+photo starts: the basic sliders always, every other recipe global that is not
+0, the white balance on the photo's own scale, and whether it is black and
+white.
 
 ### Hand test
 

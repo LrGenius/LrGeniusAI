@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+lrg-develop.workspace = true
 lrg-imaging.workspace = true
 log.workspace = true
 serde.workspace = true
@@ -20,4 +21,3 @@ futures = "0.3.34"
 
 [dev-dependencies]
 axum.workspace = true
-lrg-develop.workspace = true

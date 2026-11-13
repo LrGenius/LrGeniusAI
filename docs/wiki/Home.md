@@ -70,7 +70,7 @@ Welcome to the project wiki.
 LrGeniusAI is an AI extension for Lightroom Classic. It runs a local backend server and connects it to the Lightroom plugin to provide:
 
 - **AI metadata generation** — keywords, titles, captions, alt text, via cloud APIs or models the backend runs locally itself
-- **AI develop edits** *(beta)* — per-photo Lightroom develop recipes interpolated from your own saved edits, no LLM involved
+- **AI develop edits** *(beta)* — an AI retoucher that edits, looks at Lightroom's render and corrects it, with looks, your own instructions and AI masks; or recipes interpolated from your own saved edits, with no LLM involved
 - **Semantic free-text search** — find photos by describing them in natural language
 - **Species identification** — name the animals, plants and fungi in your photos down to species, on your own machine, with no cloud account
 - **Image culling** *(beta)* — burst grouping, scoring, Picks/Alternates/Rejects collections

@@ -5,6 +5,7 @@
 pub mod anthropic;
 pub mod chat;
 pub mod cloud_chat;
+pub mod edit_loop;
 pub mod edit_recipe;
 pub mod gemini;
 pub mod gemini_schema;

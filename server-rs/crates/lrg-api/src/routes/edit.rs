@@ -855,7 +855,7 @@ pub(crate) fn success_payload(
 /// photographer, and a second copy in Lua would drift from the thresholds it
 /// describes. Unknown codes are dropped rather than echoed: a plugin talking to
 /// a newer backend should show nothing rather than a bare identifier.
-fn guardrail_explanations(codes: &[String]) -> Vec<String> {
+pub(crate) fn guardrail_explanations(codes: &[String]) -> Vec<String> {
     use lrg_analysis::edit_guardrails::GuardrailReason::*;
     const ALL: [lrg_analysis::edit_guardrails::GuardrailReason; 9] = [
         HardLightNoAddedContrast,
