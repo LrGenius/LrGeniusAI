@@ -54,6 +54,8 @@ Welcome to the project wiki.
 - [Dev: Culling — what the other tools judge](Dev-Image-Culling-Competitive-Analysis) — Lightroom, Aftershoot, Narrative, FilterPixel, Imagen, Excire, Evoto
 - [Dev: Culling — the public benchmark](Dev-Image-Culling-Benchmark) — defects made on purpose on free-licence photos, and what it measured
 - [Dev: Capture One Port — Findings and Plan](Dev-Capture-One-Port-Plan) — what Capture One can and cannot do; investigated 2026-09-10, not pursued
+- [Dev: AI Edit via XMP — Findings and Experiments](Dev-AI-Edit-XMP-Findings) — what `crs:` XMP can express, mask coordinate frames, SDK apply paths, and the in-Lightroom experiments that settle the rest; researched 2026-09-26
+- [Dev: Native Develop Model](Dev-Develop-Model) — `lrg-develop`: the key registry, the typed develop model, the policy filter and the Lua/JSON reader; how to add a key
 
 ### Auto-generated from README files
 

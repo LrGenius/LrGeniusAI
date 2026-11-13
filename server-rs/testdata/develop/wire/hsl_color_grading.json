@@ -1,0 +1,22 @@
+{
+  "ColorGradeBlending": 60,
+  "ColorGradeGlobalHue": 0,
+  "ColorGradeGlobalSat": 0,
+  "ColorGradeHighlightLum": 4,
+  "ColorGradeMidtoneHue": 30,
+  "ColorGradeMidtoneSat": 6,
+  "ColorGradeShadowLum": -5,
+  "HueAdjustmentBlue": 12,
+  "HueAdjustmentOrange": -8,
+  "HueAdjustmentRed": 5,
+  "LuminanceAdjustmentBlue": -20,
+  "LuminanceAdjustmentOrange": 10,
+  "SaturationAdjustmentBlue": 15,
+  "SaturationAdjustmentGreen": -25,
+  "SaturationAdjustmentOrange": -10,
+  "SplitToningBalance": 10,
+  "SplitToningHighlightHue": 45,
+  "SplitToningHighlightSaturation": 10,
+  "SplitToningShadowHue": 215,
+  "SplitToningShadowSaturation": 12
+}
