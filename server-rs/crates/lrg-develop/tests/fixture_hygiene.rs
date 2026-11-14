@@ -977,8 +977,15 @@ fn dispatch_rules_flag_exactly_the_crafted_files() {
         std::fs::write(tmp.join(file), content).unwrap();
     }
     let problems = hygiene_check(&tmp);
+    // The prefix the checker reports for `file`. Joined one component at a
+    // time: the checker names the paths it walked, which use `\` on Windows,
+    // while `tmp.join("lua/x.json")` keeps the `/` and would never match.
+    let prefix_of = |file: &str| {
+        let path = file.split('/').fold(tmp.clone(), |p, part| p.join(part));
+        format!("{}: ", path.display())
+    };
     let flagged = |file: &str| {
-        let prefix = format!("{}: ", tmp.join(file).display());
+        let prefix = prefix_of(file);
         problems.iter().any(|p| p.starts_with(&prefix))
     };
     let wrong: Vec<String> = crafted
@@ -986,10 +993,7 @@ fn dispatch_rules_flag_exactly_the_crafted_files() {
         .filter(|(file, _, want)| flagged(file) != *want)
         .map(|(file, _, want)| format!("{file}: expected flagged={want}"))
         .collect();
-    let crafted_prefixes: Vec<String> = crafted
-        .iter()
-        .map(|(f, _, _)| format!("{}: ", tmp.join(f).display()))
-        .collect();
+    let crafted_prefixes: Vec<String> = crafted.iter().map(|(f, _, _)| prefix_of(f)).collect();
     let other: Vec<&String> = problems
         .iter()
         .filter(|p| !crafted_prefixes.iter().any(|c| p.starts_with(c.as_str())))
