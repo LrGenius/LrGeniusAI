@@ -1166,106 +1166,6 @@ function MetadataManager.getCatalogKeywordHierarchy()
 	return hierarchy
 end
 
--- Photo counts per keyword, keyed by catalog path. Counting means one catalog
--- query per keyword, so it is done once per Lightroom session. Staleness is
--- wanted here: keywords the plugin itself creates mid-run must not change the
--- vocabulary sent with the next photo, or every request invalidates the
--- backend's cached prompt prefix.
-local keywordUsageCache = {}
-
----
--- Counts how many photos carry each keyword in the catalog.
---
--- @param catalog The LrCatalog to walk.
--- @return table Array of { name = string, count = number }, unused keywords omitted.
---
-local function collectKeywordUsage(catalog)
-	local entries = {}
-	local visited = 0
-
-	local function traverse(keywords)
-		for _, keyword in ipairs(keywords) do
-			local okName, name = LrTasks.pcall(function()
-				return keyword:getName()
-			end)
-			if okName and type(name) == "string" and name ~= "" then
-				local okPhotos, photos = LrTasks.pcall(function()
-					return keyword:getPhotos()
-				end)
-				local count = (okPhotos and type(photos) == "table") and #photos or 0
-				-- An unused keyword is not vocabulary — it is usually a container
-				-- or a leftover, and the cap is better spent on live terms.
-				if count > 0 then
-					table.insert(entries, { name = name, count = count })
-				end
-			end
-
-			visited = visited + 1
-			if visited % 200 == 0 and LrTasks.canYield() then
-				LrTasks.yield()
-			end
-
-			-- getChildren() is known to throw on some catalogs (see
-			-- findKeywordOnPhotoForParent); a failure just prunes that subtree.
-			local okChildren, children = LrTasks.pcall(function()
-				return keyword:getChildren()
-			end)
-			if okChildren and type(children) == "table" and #children > 0 then
-				traverse(children)
-			end
-		end
-	end
-
-	local okTop, topKeywords = LrTasks.pcall(function()
-		return catalog:getKeywords()
-	end)
-	if okTop and type(topKeywords) == "table" then
-		traverse(topKeywords)
-	end
-	return entries
-end
-
----
--- Collect the catalog keyword vocabulary to send to the LLM as `catalog_keywords`.
---
--- Selected by usage frequency, with the category names merged in and pinned so
--- they always survive the cap — see Util.rankKeywordsByUsage.
---
--- Must be called from an async task (it reads the catalog).
---
--- @param limit number|nil Maximum keywords to return (default Defaults.catalogKeywordLimit).
--- @param categories table|nil The keyword_categories being sent with the same request.
--- @return table|nil Array of keyword names, or nil when the catalog has none.
---
-function MetadataManager.collectCatalogKeywordNames(limit, categories)
-	limit = tonumber(limit) or Defaults.catalogKeywordLimit
-
-	local catalog = LrApplication.activeCatalog()
-	local cacheKey = catalog:getPath() or "activeCatalog"
-	local entries = keywordUsageCache[cacheKey]
-	if not entries then
-		local started = LrDate.currentTime()
-		entries = collectKeywordUsage(catalog)
-		keywordUsageCache[cacheKey] = entries
-		log:info(
-			string.format(
-				"Collected usage counts for %d catalog keywords in %.1fs",
-				#entries,
-				LrDate.currentTime() - started
-			)
-		)
-	end
-
-	local names = Util.rankKeywordsByUsage(entries, limit, {
-		pinned = Util.flattenKeywordCategoryNames(categories),
-	})
-	if #names == 0 then
-		return nil
-	end
-	log:trace("Sending " .. #names .. " catalog keywords as LLM vocabulary")
-	return names
-end
-
 ---
 -- Whether a root keyword is one of the containers the plugin files generated
 -- keywords under ("LrGeniusAI", "ChatGPT", ...), rather than a keyword of the
@@ -1327,7 +1227,8 @@ function MetadataManager.keywordPath(keyword, access)
 	return path
 end
 
--- LrKeyword-backed accessors for MetadataManager.keywordPath.
+-- LrKeyword-backed accessors for MetadataManager.keywordPath and
+-- MetadataManager.vocabularyRootExclusion.
 local function lrKeywordAccess()
 	return {
 		getName = function(keyword)
@@ -1345,6 +1246,153 @@ local function lrKeywordAccess()
 		end,
 		topLevelNames = prefs.knownTopLevelKeywords,
 	}
+end
+
+-- Photo counts per keyword, keyed by catalog path. Counting means one catalog
+-- query per keyword, so it is done once per Lightroom session. Staleness is
+-- wanted here: keywords the plugin itself creates mid-run must not change the
+-- vocabulary sent with the next photo, or every request invalidates the
+-- backend's cached prompt prefix.
+local keywordUsageCache = {}
+
+---
+-- What the catalog vocabulary leaves out of a root keyword.
+--
+-- Two roots are not vocabulary, though both can carry more photos than any
+-- keyword of the user's own:
+--   * the taxonomy branch the species model writes (`Defaults.defaultSpeciesKeyword`),
+--     with everything under it. An identified photo carries one keyword per
+--     rank, so Linnean names fill the top of the usage ranking, and a model
+--     told to prefer these terms puts them on photos with no animal or plant
+--     in them. Naming species is the species model's job, not the LLM's.
+--   * a plugin container ("LrGeniusAI", ...), itself only: its name describes
+--     no photo (see MetadataManager.keywordPath), but the generated keywords
+--     under it are the vocabulary.
+--
+-- Only roots are asked: both are created at the top of the keyword list, so
+-- the same name further down is one the user made.
+--
+-- Exposed for the headless tests in `plugin/spec`; not part of the module's
+-- contract for callers running inside Lightroom.
+--
+-- @param keyword any A root keyword (an LrKeyword in Lightroom).
+-- @param access table As for MetadataManager.keywordPath; `getParent` is not used.
+-- @return string|nil "subtree" to leave out the root and everything under it,
+--   "self" to leave out the root but keep its children, nil to keep both.
+function MetadataManager.vocabularyRootExclusion(keyword, access)
+	local name = Util.trim(access.getName(keyword) or ""):lower()
+	if name == Defaults.defaultSpeciesKeyword:lower() then
+		return "subtree"
+	elseif isTopLevelContainer(keyword, access) then
+		return "self"
+	end
+	return nil
+end
+
+---
+-- Counts how many photos carry each keyword in the catalog.
+--
+-- @param catalog The LrCatalog to walk.
+-- @return table Array of { name = string, count = number }, unused keywords
+--   and the roots MetadataManager.vocabularyRootExclusion leaves out omitted.
+--
+local function collectKeywordUsage(catalog)
+	local entries = {}
+	local visited = 0
+	local access = lrKeywordAccess()
+
+	local function traverse(keywords, atRoot)
+		for _, keyword in ipairs(keywords) do
+			-- A root that cannot be read is kept: the filter only saves slots.
+			local exclusion
+			if atRoot then
+				local okExclusion, result = LrTasks.pcall(function()
+					return MetadataManager.vocabularyRootExclusion(keyword, access)
+				end)
+				exclusion = okExclusion and result or nil
+			end
+
+			if exclusion ~= "subtree" then
+				local okName, name = LrTasks.pcall(function()
+					return keyword:getName()
+				end)
+				if exclusion ~= "self" and okName and type(name) == "string" and name ~= "" then
+					local okPhotos, photos = LrTasks.pcall(function()
+						return keyword:getPhotos()
+					end)
+					local count = (okPhotos and type(photos) == "table") and #photos or 0
+					-- An unused keyword is not vocabulary — it is usually a container
+					-- or a leftover, and the cap is better spent on live terms.
+					if count > 0 then
+						table.insert(entries, { name = name, count = count })
+					end
+				end
+
+				visited = visited + 1
+				if visited % 200 == 0 and LrTasks.canYield() then
+					LrTasks.yield()
+				end
+
+				-- getChildren() is known to throw on some catalogs (see
+				-- findKeywordOnPhotoForParent); a failure just prunes that subtree.
+				local okChildren, children = LrTasks.pcall(function()
+					return keyword:getChildren()
+				end)
+				if okChildren and type(children) == "table" and #children > 0 then
+					traverse(children, false)
+				end
+			end
+		end
+	end
+
+	local okTop, topKeywords = LrTasks.pcall(function()
+		return catalog:getKeywords()
+	end)
+	if okTop and type(topKeywords) == "table" then
+		traverse(topKeywords, true)
+	end
+	return entries
+end
+
+---
+-- Collect the catalog keyword vocabulary to send to the LLM as `catalog_keywords`.
+--
+-- Selected by usage frequency, with the category names merged in and pinned so
+-- they always survive the cap — see Util.rankKeywordsByUsage.
+--
+-- Must be called from an async task (it reads the catalog).
+--
+-- @param limit number|nil Maximum keywords to return (default Defaults.catalogKeywordLimit).
+-- @param categories table|nil The keyword_categories being sent with the same request.
+-- @return table|nil Array of keyword names, or nil when the catalog has none.
+--
+function MetadataManager.collectCatalogKeywordNames(limit, categories)
+	limit = tonumber(limit) or Defaults.catalogKeywordLimit
+
+	local catalog = LrApplication.activeCatalog()
+	local cacheKey = catalog:getPath() or "activeCatalog"
+	local entries = keywordUsageCache[cacheKey]
+	if not entries then
+		local started = LrDate.currentTime()
+		entries = collectKeywordUsage(catalog)
+		keywordUsageCache[cacheKey] = entries
+		log:info(
+			string.format(
+				"Collected usage counts for %d catalog keywords in %.1fs",
+				#entries,
+				LrDate.currentTime() - started
+			)
+		)
+	end
+
+	local names = Util.rankKeywordsByUsage(entries, limit, {
+		pinned = Util.flattenKeywordCategoryNames(categories),
+	})
+	if #names == 0 then
+		return nil
+	end
+	log:trace("Sending " .. #names .. " catalog keywords as LLM vocabulary")
+	return names
 end
 
 ---

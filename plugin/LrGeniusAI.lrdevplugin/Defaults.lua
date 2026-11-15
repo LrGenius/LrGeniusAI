@@ -76,10 +76,16 @@ Defaults.defaultBilingualKeywords = false
 Defaults.defaultKeywordSecondaryLanguage = "English"
 Defaults.defaultKeywordAliases = false
 
+-- Whether the catalog's keywords go to the LLM as existing vocabulary:
+-- "auto", "always" or "never" (see AiProviders.sendsKeywordVocabulary).
+-- Automatic leaves it out for models on this computer.
+Defaults.defaultKeywordVocabulary = "auto"
+
 -- How many catalog keywords are sent to the LLM as existing vocabulary. Enough
--- to cover a working photographer's live vocabulary without turning the
--- run-constant part of the prompt into the bulk of the context on small local
--- models.
+-- to cover a working photographer's live vocabulary. It is not small: 500
+-- keywords measured about 2000 tokens, nine tenths of the text a photo's
+-- request carried, which is why models on this computer do not get it unless
+-- the user asks for it.
 Defaults.catalogKeywordLimit = 500
 
 -- How many earlier inputs an editable drop-down (search term, top-level

@@ -85,6 +85,8 @@ This means: if your catalog already has `Car` and the AI generates `Automobile` 
 
 Matching is exact (case-insensitive) on names and aliases — there is no similarity threshold and no embedding step, so it adds no latency to indexing.
 
+Keyword aliases act on what the model returns. The other half — telling the model beforehand which keywords the catalog already uses — is the separate **Catalog vocabulary** setting next to it, which is off for models on this computer unless you set it to *Always*; see [Analyze & Index](Help-Analyze-and-Index#hierarchy--language). The two are independent: *Keyword aliases* has no say in whether the vocabulary is sent.
+
 ### When it runs
 
 Automatically, as part of the **Apply Metadata** phase inside Analyze & Index Photos — no separate action needed. It only runs when new keywords are being written and the option is enabled.

@@ -69,6 +69,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.bilingualKeywords = prefs.bilingualKeywords or false
 	props.keywordSecondaryLanguage = prefs.keywordSecondaryLanguage or Defaults.defaultKeywordSecondaryLanguage
 	props.keywordAliases = prefs.keywordAliases or false
+	props.keywordVocabulary = prefs.keywordVocabulary or Defaults.defaultKeywordVocabulary
 
 	-- AI Model selection (unified across providers)
 	props.modelKey = prefs.modelKey -- format: "provider::model"
@@ -85,6 +86,15 @@ local function showAnalyzeAndIndexDialog(ctx)
 	local savedModelKey = AiProviders.resolveSavedKey(modelsResp, prefs.modelKey)
 	local modelItems = AiProviders.modelItems(modelsResp, savedModelKey)
 	props.modelKey = AiProviders.initialKey(modelItems, savedModelKey)
+
+	-- What Automatic means depends on the model, which is picked on another tab.
+	local function refreshVocabularyHint(properties)
+		properties.keywordVocabularyHint =
+			AiProviders.keywordVocabularyHint(properties.keywordVocabulary, properties.modelKey)
+	end
+	refreshVocabularyHint(props)
+	props:addObserver("modelKey", refreshVocabularyHint)
+	props:addObserver("keywordVocabulary", refreshVocabularyHint)
 	-- Problems listing a provider the user set up (an Other AI server that
 	-- cannot be reached, a rejected key) are shown right under the picker, as
 	-- is a backend that did not answer at all.
@@ -492,6 +502,31 @@ local function showAnalyzeAndIndexDialog(ctx)
 							enabled = bind("generateKeywords"),
 						}),
 					}),
+					f:row({
+						f:static_text({
+							title = "Catalog vocabulary:",
+							width = share("labelWidth"),
+						}),
+						f:popup_menu({
+							value = bind("keywordVocabulary"),
+							items = AiProviders.KEYWORD_VOCABULARY_ITEMS,
+							enabled = bind("generateKeywords"),
+							tooltip = "Sends your catalog's most-used keywords with every photo, so the model "
+								.. "reuses existing terms instead of inventing near-synonyms.",
+						}),
+					}),
+					f:row({
+						f:spacer({ width = share("labelWidth") }),
+						f:static_text({
+							title = bind("keywordVocabularyHint"),
+							size = "small",
+							wrap = true,
+							-- Sized for the longer hint up front: the view is laid
+							-- out once, and the hint changes with the model.
+							height_in_lines = 2,
+							width = 300,
+						}),
+					}),
 				}),
 
 				f:group_box({
@@ -748,6 +783,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.bilingualKeywords = props.bilingualKeywords
 		prefs.keywordSecondaryLanguage = props.keywordSecondaryLanguage
 		prefs.keywordAliases = props.keywordAliases
+		prefs.keywordVocabulary = props.keywordVocabulary
 
 		-- Keep track of used top-level keywords
 		if props.useTopLevelKeyword then
@@ -975,10 +1011,15 @@ LrTasks.startAsyncTask(function()
 		})
 
 		-- Give the model the vocabulary it already has, so it reuses existing
-		-- terms instead of inventing near-synonyms with different casing. Counting
+		-- terms instead of inventing near-synonyms with different casing — unless
+		-- the Catalog vocabulary setting leaves it out for this model. Counting
 		-- keyword usage walks the whole keyword tree, so it runs under the progress
 		-- scope rather than silently freezing the UI on a large catalog.
-		if props.generateKeywords and props.enableMetadata then
+		if
+			props.generateKeywords
+			and props.enableMetadata
+			and AiProviders.sendsKeywordVocabulary(props.keywordVocabulary, props.modelKey)
+		then
 			progressScope:setCaption(
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ReadingCatalogKeywords=Reading catalog keywords...")
 			)

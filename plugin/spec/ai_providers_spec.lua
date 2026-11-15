@@ -416,3 +416,49 @@ describe("AiProviders.migrateLegacyPrefs", function()
 		assert.are.equal("https://openrouter.ai/api/v1", p.aiServerUrl)
 	end)
 end)
+
+describe("AiProviders keyword vocabulary", function()
+	local ON_THIS_COMPUTER =
+		{ "mlx::gemma-4-e4b-it-4bit", "llamacpp::gemma-4-e4b.gguf", "ollama::qwen2.5vl", "lmstudio::x" }
+	local ELSEWHERE =
+		{ "gemini::gemini-3.5-flash-lite", "chatgpt::gpt-5-mini", "anthropic::claude-x", "openai_compatible::m" }
+
+	-- Hundreds of keywords are most of a small model's prompt, and it copies
+	-- from them instead of looking at the photo.
+	it("leaves the vocabulary out for models on this computer when automatic", function()
+		for _, key in ipairs(ON_THIS_COMPUTER) do
+			assert.is_false(AiProviders.sendsKeywordVocabulary("auto", key), key)
+			assert.matches("^Not sent", AiProviders.keywordVocabularyHint("auto", key))
+		end
+	end)
+
+	it("sends it to cloud models and the user's own server when automatic", function()
+		for _, key in ipairs(ELSEWHERE) do
+			assert.is_true(AiProviders.sendsKeywordVocabulary("auto", key), key)
+			assert.matches("^Sent", AiProviders.keywordVocabularyHint("auto", key))
+		end
+	end)
+
+	it("follows Always and Never whatever the model, and needs no hint for them", function()
+		for _, key in ipairs({ ON_THIS_COMPUTER[1], ELSEWHERE[1] }) do
+			assert.is_true(AiProviders.sendsKeywordVocabulary("always", key), key)
+			assert.is_false(AiProviders.sendsKeywordVocabulary("never", key), key)
+			assert.are.equal("", AiProviders.keywordVocabularyHint("always", key))
+			assert.are.equal("", AiProviders.keywordVocabularyHint("never", key))
+		end
+	end)
+
+	-- A pref from a later version, or none at all, must not switch it off
+	-- for cloud models nor on for local ones.
+	it("treats a missing or unknown setting as automatic", function()
+		for _, setting in ipairs({ nil, "sometimes" }) do
+			assert.is_false(AiProviders.sendsKeywordVocabulary(setting, ON_THIS_COMPUTER[1]))
+			assert.is_true(AiProviders.sendsKeywordVocabulary(setting, ELSEWHERE[1]))
+		end
+	end)
+
+	it("offers exactly the settings it understands, Automatic first", function()
+		assert.are.same({ "auto", "always", "never" }, values(AiProviders.KEYWORD_VOCABULARY_ITEMS))
+		assert.are.equal("", AiProviders.keywordVocabularyHint("auto", nil))
+	end)
+end)
