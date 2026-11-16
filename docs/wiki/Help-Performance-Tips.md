@@ -12,7 +12,8 @@ which, and what you can tune to make the slow ones faster.
 | Feature | Calls an LLM? | What drives the time |
 |---|---|---|
 | **Analyze & Index — AI metadata** (keywords/title/caption/alt text) | **Yes, once per photo** | Model choice, export size, prompt options |
-| **AI Edit Photos** | No — matches your saved edits locally | Export size, review dialog |
+| **AI Edit Photos — AI retoucher** | **Yes, once per round** (up to *Edits per photo*, default 3) | Model choice, edits per photo, one Lightroom render per round, review dialog |
+| **AI Edit Photos — My style only** | No — matches your saved edits locally | Export size, review dialog |
 | **Deduplicate Keyword Synonyms** | Optional, once per cluster (not per photo) | Number of keyword clusters, not catalog size |
 | Analyze & Index — **search embeddings** (SigLIP2) | No — local ONNX model, always | Photo count only; same speed regardless of LLM choice |
 | Analyze & Index — **species identification** (BioCLIP 2) | No — local ONNX model, always | Photo count, and how many photos clear the organism pre-filter |
@@ -21,8 +22,8 @@ which, and what you can tune to make the slow ones faster.
 | **Find Similar Images** | No | Vector lookup (CLIP) or perceptual hash (phash) |
 | **Advanced Search** | No | Vector lookup against existing embeddings |
 
-The practical upshot: **Analyze & Index is the only per-photo feature
-where your LLM choice matters for speed.** Everything else is bounded by
+The practical upshot: **Analyze & Index and the AI Edit retoucher are the only
+per-photo features where your LLM choice matters for speed.** Everything else is bounded by
 local compute on the backend machine and is unaffected by whether you
 picked a cheap cloud model or a big local one — but those features all
 *depend on* having run Analyze & Index first (embeddings for search/cull/find
@@ -259,11 +260,14 @@ These are secondary compared to §2–4, but worth knowing:
    feature — you can always come back and run it over just the wildlife folders,
    because photos already indexed for search keep their embedding for the gate
    to use.
-7. **For AI Edit**, keep **Review each proposed edit** on until you've
-   validated the results against your shooting style, then turn it off for
-   large batches — it doesn't change compute cost, but it does gate throughput
-   on how fast you click through the review dialog. The generation itself is
-   local and needs no LLM at all.
+7. **For AI Edit**, keep **Review each edit** on until you've validated the
+   results against your shooting style, then turn it off for large batches — it
+   doesn't change compute cost, but it does gate throughput on how fast you
+   click through the review dialog. With the **AI retoucher**, each round is one
+   model call (the photo at 1536 px plus the latest render) and one Lightroom
+   render, so **Edits per photo** is the main dial: one round is a single-shot
+   edit, and most photos settle in two or three. **My style only** is local and
+   needs no LLM at all.
 
 ---
 

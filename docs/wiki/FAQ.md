@@ -180,19 +180,22 @@ Results are ranked by combining visual semantic embeddings with a text search ov
 
 ### What does AI Edit generate?
 
-A structured Lightroom develop recipe of global adjustments (exposure, white balance, tone curve, contrast, presence, sharpening, and so on), built by matching the photo against your own saved edits. The recipe is applied via the Lightroom SDK — no raw pixel editing happens outside Lightroom.
+Ordinary Lightroom develop settings, applied via the Lightroom SDK — no raw pixel editing happens outside Lightroom. What goes into them depends on the **Editor** you pick:
+
+- **AI retoucher** — a complete edit (white balance, exposure, tonal range, presence, HSL, colour grading, effects) plus Lightroom's AI masks where global sliders would hurt the rest of the photo. A vision model makes it, looks at Lightroom's render of it, and corrects it over a few rounds.
+- **My style only** — a recipe of global adjustments blended from your own saved edits on similar photos.
 
 ### Which model does AI Edit use?
 
-None. AI Edit does not call a language model at all — it interpolates the develop settings of the training examples closest to the photo. Model choice only affects *Analyze & Index*.
+It depends on the editor. The **AI retoucher** uses any provider set up in Plug-in Manager — a cloud model, an AI server or a model on this computer — as long as it **sees images** and can **call tools**; the dialog defaults to the model chosen for *Analyze & Index*, and larger models edit noticeably better. **My style only** calls no language model at all: it interpolates the develop settings of the training examples closest to the photo. See [Help: AI Edit Photos](Help-AI-Edit#which-model).
 
 ### AI Edit says my style profile is not ready
 
-It needs at least five saved training examples before it can produce anything. Edit some photos the way you like them and run **Save Edits as AI Training Examples** (*Help* menu). See [Help: Train from Edits](Help-Train-From-Edits).
+*My style only* needs at least five saved training examples before it can produce anything, and so does the retoucher's **Start from my own style** option, which is greyed out until then. The AI retoucher itself runs without any. Edit some photos the way you like them and run **Save Edits as AI Training Examples** (*Help* menu). See [Help: Train from Edits](Help-Train-From-Edits).
 
 ### I want to review edits before they are applied
 
-Enable **Review each proposed edit before applying it** in the AI Edit dialog. You will see the proposed develop values, the confidence of the style match, and any guardrail explanations, and can apply or skip each photo. (There is no rendered before/after preview yet — use Lightroom's History panel to judge the result.)
+Enable **Review each edit** in the AI Edit dialog. With the **AI retoucher** you see each finished edit — the photo, the round that was kept and the model's assessment of each round — and keep or discard it; **Discard** takes the photo back exactly to where it was, masks included. With **My style only** you see the proposed develop values, the confidence of the style match and any guardrail explanations *before* the edit is applied, and can apply or skip each photo. Either way, every change is a step in Lightroom's Edit History.
 
 ### Can I keep my original untouched?
 
