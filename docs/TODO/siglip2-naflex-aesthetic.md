@@ -63,7 +63,7 @@
   - `parse_options` (~278): Neuer Task `aesthetic`. `embeddings` und `cull` schließen ihn **beide** ein. NaFlex-Patches werden einmal berechnet und beiden Towers gegeben.
   - Gespeichert wird in den Metadata-JSON-Feldern: `aesthetic_score`, `aesthetic_model`, `genre`, `genre_confidence`.
   - Überspringen, wenn `aesthetic_model` aktuell ist (Muster wie beim `embedding_model`). `/v1/index/unprocessed` reiht Fotos ohne aktuellen Score erneut ein.
-  - Die Index-Antwort liefert `aesthetic_score` und `genre`. Fehlt das Modell, kommt das in die `warnings` mit einem Hinweis, was zu tun ist („Ästhetik-Modell nicht geladen – „Download AI models“ im Plug-in Manager“). Gilt nach CLAUDE.md „Errors must surface“.
+  - Die Index-Antwort liefert `aesthetic_score` und `genre`. Fehlt das Modell, kommt das in die `warnings` mit einem Hinweis, was zu tun ist („Ästhetik-Modell nicht geladen – „Download AI models“ im Plug-in Manager“). Gilt nach AGENTS.md „Errors must surface“.
 - **Plugin:**
   - `MetadataManager.lua` (beim `aiModel`-Write ~271) und `TaskRetrieveMetadata.lua` schreiben `aestheticScore` (Format `"7.4"`) und `genre`.
   - `APISearchIndex.lua` reicht beides durch, `warnings` werden bis zum Dialog gesammelt.
@@ -122,7 +122,7 @@
   - `Credits.md` (AestheticSigLIP, SigLIP2 NaFlex)
   - `server-rs/README.md` (Export, Env-Vars)
 - Golden-Familie `aesthetic`:
-  - in `CLAUDE.md` **und** `AGENTS.md` bei `LRG_REQUIRE_GOLDENS` ergänzen, bei Bedarf in `CONTRIBUTING.md`
+  - in `AGENTS.md` bei `LRG_REQUIRE_GOLDENS` ergänzen (`CLAUDE.md` importiert es), bei Bedarf in `CONTRIBUTING.md`
   - in `golden-tests-full.yml` laden lassen
 - `scripts/check-docs.py --for <datei>` für jede berührte Datei ausführen.
 

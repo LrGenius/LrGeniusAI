@@ -113,7 +113,7 @@ jobs:
       # crate. What it never compiles is the `#[cfg(feature = "llamacpp")]`
       # glue in lrg-api (llm_engine.rs and the bench example), whose first
       # compile used to be the Windows leg of release.yml -- i.e. after a `v*`
-      # tag had already been pushed. CLAUDE.md requires this invocation to be
+      # tag had already been pushed. AGENTS.md requires this invocation to be
       # clean; nothing enforced it.
       #
       # Both invocations are kept on purpose: the one above lints the

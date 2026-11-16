@@ -23,8 +23,12 @@ too, within the scope they approved.
 
 - **Every catalog counts as production until the developer tells you it is a
   test catalog.** They can say so in this conversation, or in their standing
-  instructions: their own `CLAUDE.md`, memory or agent settings. A name or
-  path with "test" in it proves nothing, so ask.
+  instructions: their own `CLAUDE.md`, memory or agent settings, or
+  `LRG_TEST_CATALOGS`, which only they set. A name or path with "test" in it
+  proves nothing, so ask. In Claude Code the hook
+  `.claude/hooks/live-test-guard.py` backs this up: a live call in a catalog
+  not listed in `LRG_TEST_CATALOGS` becomes a permission prompt for the
+  developer. It does not replace asking.
 - **A test catalog holds copies.** If its photos are the original files of a
   production catalog, treat it as production. With *Automatically write
   changes into XMP* on, metadata written in one catalog ends up in files the

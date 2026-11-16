@@ -57,12 +57,12 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 
 ## 🛠️ Development Guidelines
 
-This is the short version. [`CLAUDE.md`](CLAUDE.md) (mirrored in
-[`AGENTS.md`](AGENTS.md) for other coding agents) is the full, authoritative set
-of project rules — architecture, the error-surfacing chain, and the details
-behind every point below. If the two ever disagree, `CLAUDE.md` wins; please
-open an issue so this file can be fixed. Changing a rule here means changing it
-there too, in the same PR.
+This is the short version. [`AGENTS.md`](AGENTS.md) is the full, authoritative
+set of project rules — architecture, the error-surfacing chain, and the details
+behind every point below. It is written for AI coding agents but holds for
+everyone; [`CLAUDE.md`](CLAUDE.md) imports it for Claude Code. If this file and
+`AGENTS.md` ever disagree, `AGENTS.md` wins; please open an issue so this file
+can be fixed. Changing a rule here means changing it there too, in the same PR.
 
 ### General Rules
 - **Error Handling**: All user-facing errors must be surfaced in the Lightroom GUI using `ErrorHandler.handleError`. Avoid silent failures.
@@ -84,7 +84,7 @@ there too, in the same PR.
 - **Structure**:
     - Routes: `lrg-api::routes`, one axum `Router` per domain.
     - Business Logic: `lrg-analysis`/`lrg-imaging`/`lrg-ml`; LLM/cloud clients in `lrg-providers`.
-- **API Response**: Return structured JSON with `results`, `error`, and `warning` fields.
+- **API Response**: Return structured JSON with `results`, `error` (or `error_messages`), and `warnings` fields — a success that lost something along the way says so in `warnings`.
 - **Lifecycle**: PID file + "OK" signal file handshake, handled in `lrg-common`.
 - **Formatting**: `cargo fmt` and `cargo clippy --workspace --all-targets` must be clean (zero warnings).
 
@@ -127,6 +127,36 @@ must survive every edit.
 - **Docs are part of the change.** [`docs/doc-sources.toml`](docs/doc-sources.toml) maps each wiki page to the source files it describes; when you touch one of those files, update the page in the same PR. `scripts/check-docs.py --for <path>` prints the pages that document a file.
 - `scripts/check-docs.py` runs as a pre-commit hook and in CI (`lint-format.yml`). It **fails** when an axum route has no heading in `docs/wiki/Dev-Backend-API.md` (or a heading names no real route), and when an endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table does not exist on the backend — unless it is listed under `[[contract.known_gap]]` in `doc-sources.toml` with a written reason.
 - It only **warns** about pages whose sources have newer commits than the page, so the warning is easy to miss (it shows up in the CI job summary). If a flagged page is still accurate, add a `Docs-Reviewed: <Page-Name>.md` trailer to your commit message — that is what clears the warning.
+
+---
+
+## 🤖 AI coding agents
+
+The project's rules for AI coding agents are in [`AGENTS.md`](AGENTS.md); Codex
+and most other agents read it by themselves. Claude Code reads
+[`CLAUDE.md`](CLAUDE.md), which imports `AGENTS.md` and adds Claude Code's own
+tooling, all of it under `.claude/`:
+
+- **Hooks** lint every file right after the agent edits it (the linters
+  pre-commit runs), run `scripts/check-docs.py` when a route, the API doc or a
+  rule file changes, and turn a live test in Lightroom into a permission prompt
+  unless the open catalog is one you listed in `LRG_TEST_CATALOGS` as a test
+  catalog.
+- **Subagents** search the code, run the checks, bring the wiki in step,
+  review a change against the project rules and run the mechanical part of the
+  live test.
+- **Skills** are step-by-step runbooks: the live test in Lightroom, a new
+  backend route, a new agent-bridge command, a release. They are plain Markdown
+  under `.claude/skills/`, so people and other agents can follow them too.
+- **graphify** *(optional)* builds a local knowledge graph of the code and the
+  wiki in `graphify-out/` (ignored by git), which agents query for how the parts
+  of the system connect.
+
+Personal settings — your test catalogs, the graphify hooks, MCP servers only
+you use — go into `.claude/settings.local.json`, which git ignores. A change to
+`.claude/` is a change like any other: update
+[Dev: AI Tooling](docs/wiki/Dev-AI-Tooling.md), which describes all of it and
+how to set it up, in the same PR.
 
 ---
 

@@ -48,6 +48,7 @@ Welcome to the project wiki.
 - [Backend API Reference](Dev-Backend-API) — all REST endpoints documented
 - [Dev: Agent Bridge and MCP Endpoint](Dev-Agent-Bridge) — how agents drive Lightroom, the command contract, and testing the plugin through MCP
 - [Dev: Agent Chat](Dev-Agent-Chat) — the in-app chat: a local model works the catalog through the MCP tools, with the user's approval
+- [Dev: AI Tooling](Dev-AI-Tooling) — `AGENTS.md` and `CLAUDE.md`, the Claude Code hooks, subagents and skills, the test-catalog guard, and the optional graphify knowledge graph
 - [Server Guide](Dev-Server-Guide) — backend architecture, database backup, lifecycle
 - [Dev: Feature Priority Decision](Dev-Feature-Priority-Decision)
 - [Dev: Image Culling Implementation Plan](Dev-Image-Culling-Implementation-Plan)

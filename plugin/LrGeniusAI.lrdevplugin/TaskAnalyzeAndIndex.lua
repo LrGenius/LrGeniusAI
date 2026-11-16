@@ -619,7 +619,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 						f:checkbox({
 							value = bind("submitGps"),
 							-- Plain text, not LOC: new strings are written as
-							-- finished English (see CLAUDE.md).
+							-- finished English (see AGENTS.md).
 							title = "Location (from the catalog, the file, or looked up from the GPS coordinates)",
 						}),
 					}),

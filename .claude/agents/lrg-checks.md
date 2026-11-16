@@ -1,6 +1,6 @@
 ---
 name: lrg-checks
-description: Runs this repository's checks the way CI does and reports only what failed — cargo fmt/clippy/test for server-rs, stylua/luacheck/busted for the plugin, and scripts/check-docs.py (which includes the CLAUDE.md/AGENTS.md sync). Use it after a change instead of reading cargo or busted output in the main conversation, and for the headless rows of the live-test runbook. Read-only — it never fixes anything and never runs a test that touches Lightroom.
+description: Runs this repository's checks the way CI does and reports only what failed — cargo fmt/clippy/test for server-rs, stylua/luacheck/busted for the plugin, and scripts/check-docs.py (which includes the check that CLAUDE.md imports AGENTS.md without repeating it). Use it after a change instead of reading cargo or busted output in the main conversation, and for the headless rows of the live-test runbook. Read-only — it never fixes anything and never runs a test that touches Lightroom.
 model: haiku
 effort: low
 tools: Bash, Read, Grep, Glob

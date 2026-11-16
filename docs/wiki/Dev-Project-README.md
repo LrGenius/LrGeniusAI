@@ -108,7 +108,7 @@ This project is built on the belief that AI tooling for creatives should remain 
 
 ## 🛠️ Development
 
-For more detailed information on how to contribute, please see our [CONTRIBUTING.md](CONTRIBUTING.md).
+For more detailed information on how to contribute, please see our [CONTRIBUTING.md](CONTRIBUTING.md). AI coding agents — Claude Code, Codex and others — work from [AGENTS.md](AGENTS.md), the project's full set of rules.
 
 
 ## 🤝 Credits

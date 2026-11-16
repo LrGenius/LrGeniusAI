@@ -57,7 +57,7 @@ jobs:
       # the whole llama.cpp + Vulkan Windows build, and a half-configured
       # Apple setup silently degrades to an unsigned .pkg -- the macOS signing
       # step only logs "building unsigned (dev) artifact." and exits 0. That
-      # is the "a degraded success is not a success" rule in CLAUDE.md,
+      # is the "a degraded success is not a success" rule in AGENTS.md,
       # applied to the release itself.
       #
       # Windows signing (SignPath Foundation, free for open source) is always

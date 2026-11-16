@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex and other coding agents when working with code in this repository. It mirrors `CLAUDE.md` line for line; `scripts/check-docs.py` fails when the two drift apart.
+This file provides guidance to AI coding agents — Codex, Claude Code and others — when working with code in this repository. It holds the project's rules for all of them. Claude Code reads it through `CLAUDE.md`, which imports it and adds only what Claude Code alone has: its hooks, subagents and skills.
 
 ---
 
@@ -247,7 +247,7 @@ act on — and that decision belongs in a comment at the point where it is made.
 
 ### Live tests in Lightroom
 
-- **Never test in a developer's production catalog without their approval.** The MCP tools, `run_plugin_tests`, the `live_lightroom` tests and `eval_lua` all work on whatever catalog is open in Lightroom, so check which one it is (`get_status`) before you start. Unless the developer has told you it is a test catalog — one holding copies, not the originals a production catalog uses — ask first: name the catalog and say what the test would do. That applies to read-only tests too, since they send previews, metadata and the names of recognised people to the agent. Once the developer approves, test there too, within what they approved (read-only, indexing, changes or developer commands). An approval holds for that catalog in that conversation. The full procedure is in `.claude/skills/lrgenius-mcp-full-test/SKILL.md`.
+- **Never test in a developer's production catalog without their approval.** The MCP tools, `run_plugin_tests`, the `live_lightroom` tests and `eval_lua` all work on whatever catalog is open in Lightroom, so check which one it is (`get_status`) before you start. Unless the developer has told you it is a test catalog — one holding copies, not the originals a production catalog uses — ask first: name the catalog and say what the test would do. A catalog listed in the environment variable `LRG_TEST_CATALOGS` (paths to `.lrcat` files or catalog names, separated by `;`) counts as such a statement; only the developer sets it, so never set, extend or export it yourself. That applies to read-only tests too, since they send previews, metadata and the names of recognised people to the agent. Once the developer approves, test there too, within what they approved (read-only, indexing, changes or developer commands). An approval holds for that catalog in that conversation. The full procedure is in `.claude/skills/lrgenius-mcp-full-test/SKILL.md`.
 
 ### Docs
 
@@ -256,17 +256,26 @@ act on — and that decision belongs in a comment at the point where it is made.
 - `scripts/check-docs.py` enforces the parts that can be checked mechanically, and runs in pre-commit and CI (`lint-format.yml`):
   - every axum route has a heading in `docs/wiki/Dev-Backend-API.md`, and every heading names a real route (method and path both) — **hard failure**
   - every endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table exists on the backend — **hard failure**, unless it is listed under `[[contract.known_gap]]` in `docs/doc-sources.toml` with a written reason
-  - `AGENTS.md` matches `CLAUDE.md` line for line, apart from the agent-specific lines in `AGENTS_ONLY_LINES` — **hard failure**
+  - `CLAUDE.md` imports `AGENTS.md` (a line `@AGENTS.md`) and repeats none of it: no heading of `AGENTS.md`, and none of its lines of 60 characters or more, may appear in `CLAUDE.md` too — **hard failure**
   - pages whose sources have newer commits than the page — **warning**, reported in the CI job summary
 - `scripts/check-docs.py --for <path>` prints the pages that document a file.
-- **The rule files must not disagree.** Three files state this project's rules: `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md`. `CLAUDE.md` is authoritative. `AGENTS.md` is its copy for other coding agents and stays identical line for line, apart from the few agent-specific lines listed in `AGENTS_ONLY_LINES` in `scripts/check-docs.py` — which fails when the two drift, so edit both in the same change. `CONTRIBUTING.md` is the short version for human contributors: it may leave details out, but it never contradicts the other two. Adding, changing or dropping a rule in any of them means updating the others in the same change. If you find them contradicting each other, don't silently follow one — fix the drift, or raise it if the right answer isn't clear.
+- **The rule files must not disagree.** Three files state this project's rules. `AGENTS.md` is authoritative and holds every rule that applies to any coding agent. `CLAUDE.md` imports it and adds only what is specific to Claude Code — its hooks, subagents, skills and language-server tools — so a project rule never goes there. `CONTRIBUTING.md` is the short version for human contributors: it may leave details out, but it never contradicts `AGENTS.md`. Adding, changing or dropping a rule that `CONTRIBUTING.md` covers means updating it in the same change. If you find them contradicting each other, don't silently follow one — fix the drift, or raise it if the right answer isn't clear.
 
-### Editor automation (Claude Code)
+### Editor and agent tooling
 
-- A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, and `cargo fmt`/`cargo clippy` for `server-rs/` Rust. Fix anything it reports before moving on — don't disable it to get past a warning.
-- The same hook names the wiki pages documenting the edited file (once per page per session). Treat that as part of the task: update the page now, or state that it is still correct.
-- **Ask the language servers before reading files.** `.claude/settings.json` enables rust-analyzer for `server-rs/` and lua-language-server for the plugin; `.luarc.json` sets the latter up for Lightroom's Lua 5.1 and its globals, and leaves out `plugin/spec/`, whose mocks would shadow the real definitions. For "where is X defined, who calls Y, what type is Z", use `workspaceSymbol`, `goToDefinition`, `findReferences`, `incomingCalls` and `hover`, then read only the lines they point to. Grep stays the tool for text (messages, pref keys, JSON fields, route strings, the links between an endpoint in `APISearchIndex.lua` and its axum route) and for code behind `#[cfg(feature = "llamacpp")]`, which rust-analyzer does not compile. rust-analyzer needs about a minute to index a new session, so an empty answer then means "not ready", not "not there". On a large Lua file `documentSymbol` lists every local and every block (Util.lua: about 75 KB); look the name up with `workspaceSymbol` instead.
-- **Subagents** in `.claude/agents/` each run on the model their work needs: `lrg-explore` (Haiku) finds code, `lrg-checks` (Haiku) runs the CI checks and reports only failures, `lrg-docs-sync` (Sonnet) brings the wiki in step with a change, `lrg-rules-reviewer` (Sonnet) checks a change against *Key Rules*, and `lrg-live-tester` (Sonnet) runs the mechanical phases of the live-test runbook. Hand them build output and wide searches rather than reading those in the main conversation; design and implementation stay on the session's model.
-- Other coding agents don't get the hook, the language-server plugins or the subagents. Do the hook's job by hand after editing a file: `pre-commit run --files <path>` for the linters, and `scripts/check-docs.py --for <path>` for the pages to update. Use your own language-server integration where you have one.
+- **Claude Code** gets this project's tooling through `CLAUDE.md`: hooks that lint each edited file and guard live tests, language-server plugins, subagents and skills, all under `.claude/`. [Dev-AI-Tooling.md](docs/wiki/Dev-AI-Tooling.md) gives the overview.
+- **Every other agent** does the hooks' job by hand after editing a file: `pre-commit run --files <path>` for the linters, and `scripts/check-docs.py --for <path>` for the wiki pages to update. Use your own language-server integration where you have one: it answers "where is X defined, who calls Y" more reliably than reading whole files.
+- The runbooks under `.claude/skills/` — `lrgenius-mcp-full-test`, `new-endpoint`, `new-agent-command`, `release` — are plain Markdown; any agent can follow them step by step.
 
-Lightroom Classic SDK reference: read `.claude/rules/lrc-plugin-dev.md` before working on plugin Lua.
+Lightroom Classic SDK reference: `.claude/rules/lrc-plugin-dev.md`. Read it before working on plugin Lua; Claude Code loads it by itself as soon as a plugin `.lua` file is read.
+
+## graphify (optional)
+
+A developer who works with [graphify](https://pypi.org/project/graphifyy/) (`uv tool install graphifyy`) has a knowledge graph of this repository in `graphify-out/`: the code, the wiki, the links between them, communities and cross-file relationships. It is local — `graphify-out/` is in `.gitignore` — built with `/graphify .` and kept current by the git hooks that `graphify hook install` adds (after each commit, checkout and merge; code only, no model involved). Without `graphify-out/graph.json`, skip this section.
+
+When the graph exists:
+- Pick the tool by the question. Where a symbol is defined, who calls it, what type it has: the language servers. How parts of the system connect, which wiki page describes which code, what a change touches across files: `graphify query "<question>"`, `graphify path "<A>" "<B>"` and `graphify explain "<concept>"`, then read only the lines they point to. Exact text — messages, pref keys, JSON fields, route strings: grep.
+- Put the same choice into the prompt of every subagent that explores code.
+- `graphify section "<heading>"` prints one Markdown section, so a long wiki page need not be opened whole.
+- Read `graphify-out/GRAPH_REPORT.md` only for a broad architecture review, or when query, path and explain do not surface enough.
+- The git hooks re-extract code only. Wiki pages and images change in the graph only with `/graphify . --update`, which runs a model over them; until then, check a graph answer about the docs against the page itself.

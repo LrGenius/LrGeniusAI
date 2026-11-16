@@ -47,7 +47,7 @@ endpoint path in Lua and its axum route in Rust), Markdown and TOML.
   Lua index on purpose (their mocks would shadow the real definitions), so
   grep them when tests matter.
 
-**Where things live** is described under *Architecture* in CLAUDE.md. For
+**Where things live** is described under *Architecture* in AGENTS.md. For
 "which page documents this file", run `python3 scripts/check-docs.py --for
 <path>`.
 

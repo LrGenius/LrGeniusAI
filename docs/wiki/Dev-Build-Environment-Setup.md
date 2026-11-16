@@ -3,7 +3,7 @@
 This page walks through setting up a machine from scratch to build the
 `server-rs` backend, including the optional local-LLM backends. For day-to-day
 build/test commands once the environment is ready, see the
-[Server README](Dev-Server-README) and [CLAUDE.md](../../CLAUDE.md).
+[Server README](Dev-Server-README) and [AGENTS.md](../../AGENTS.md).
 
 There are three layers, each opt-in on top of the last:
 
@@ -277,3 +277,4 @@ LuaRocks.
 - [Server README](Dev-Server-README) — day-to-day build/test/run commands, model file setup
 - [Server Guide](Dev-Server-Guide) — backend architecture and responsibilities
 - [Backend API Reference](Dev-Backend-API)
+- [Dev: AI Tooling](Dev-AI-Tooling) — setting up Claude Code's hooks and your test catalogs, and the optional graphify knowledge graph
