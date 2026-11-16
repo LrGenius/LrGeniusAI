@@ -161,6 +161,9 @@ Both reuse models you already have: llama.cpp picks up GGUFs under
 One caveat that applies to both: **do not enable keyword aliases or bilingual
 keywords with a local model.** They turn every keyword into a structured object,
 which small models handle badly — the Analyze & Index dialog warns about it.
+Leave **Catalog vocabulary** on *Automatic*, which does not send your catalog's
+keywords to them: a small model copies from that list instead of looking at
+the photo.
 
 ### Ollama
 

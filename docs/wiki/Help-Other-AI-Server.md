@@ -75,6 +75,12 @@ Examples:
   computer, and the provider's terms apply.
 - **Costs.** Paid models on OpenRouter cost credits per photo, like OpenAI or
   Gemini. OpenRouter's `:free` models cost nothing but are rate limited.
+- **Catalog vocabulary is sent.** With *Catalog vocabulary* on *Automatic*,
+  the server gets up to 500 of your catalog's most-used keywords with every
+  photo, as cloud models do — LrGeniusAI cannot tell an OpenRouter model from a
+  small one on your own machine. A small model copies from that list instead
+  of looking at the photo, so set it to *Never* for one (see
+  [Analyze & Index](Help-Analyze-and-Index#hierarchy--language)).
 - **One photo at a time.** Requests to your own server are sent one after the
   other, as for Ollama and LM Studio: most such servers run a single model
   that would process them one by one anyway.

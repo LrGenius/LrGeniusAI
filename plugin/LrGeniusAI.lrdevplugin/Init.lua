@@ -129,6 +129,10 @@ if _G.prefs.keywordAliases == nil then
 	_G.prefs.keywordAliases = Defaults.defaultKeywordAliases
 end
 
+if _G.prefs.keywordVocabulary == nil then
+	_G.prefs.keywordVocabulary = Defaults.defaultKeywordVocabulary
+end
+
 if _G.prefs.replaceSS == nil then
 	_G.prefs.replaceSS = false
 end

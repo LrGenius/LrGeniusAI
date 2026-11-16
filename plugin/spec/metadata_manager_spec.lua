@@ -250,6 +250,120 @@ describe("MetadataManager.keywordPath", function()
 	end)
 end)
 
+describe("MetadataManager.vocabularyRootExclusion", function()
+	require("Defaults")
+	local exclusion = MetadataManager.vocabularyRootExclusion
+
+	local function kw(name, synonyms)
+		return { name = name, synonyms = synonyms }
+	end
+
+	local access = {
+		getName = function(k)
+			return k.name
+		end,
+		getSynonyms = function(k)
+			return k.synonyms
+		end,
+		topLevelNames = { "LrGeniusAI", "Motorsport" },
+	}
+
+	it("leaves out the species branch with everything under it", function()
+		assert.are.equal("subtree", exclusion(kw(Defaults.defaultSpeciesKeyword), access))
+		assert.are.equal("subtree", exclusion(kw(" species "), access))
+	end)
+
+	it("leaves out a plugin container but not the keywords under it", function()
+		assert.are.equal("self", exclusion(kw("Motorsport"), access))
+		assert.are.equal("self", exclusion(kw("My AI", { Defaults.topLevelKeywordSynonym }), access))
+	end)
+
+	it("keeps a root keyword of the user's own", function()
+		assert.is_nil(exclusion(kw("Places"), access))
+		assert.is_nil(exclusion(kw("Speciesism"), access))
+	end)
+end)
+
+-- The catalog walk behind the vocabulary, against a fake catalog: what the
+-- model is told to prefer is the user's terms and the generated ones, not the
+-- taxonomy the species model wrote or the container they are filed under.
+describe("MetadataManager.collectCatalogKeywordNames", function()
+	require("Defaults")
+	local saved = {}
+
+	local function lrKeyword(name, photos, children, synonyms)
+		local list = {}
+		for i = 1, photos do
+			list[i] = {}
+		end
+		return {
+			getName = function()
+				return name
+			end,
+			getPhotos = function()
+				return list
+			end,
+			getChildren = function()
+				return children or {}
+			end,
+			getSynonyms = function()
+				return synonyms or {}
+			end,
+		}
+	end
+
+	local function catalogWith(path, roots)
+		return {
+			getPath = function()
+				return path
+			end,
+			getKeywords = function()
+				return roots
+			end,
+		}
+	end
+
+	before_each(function()
+		saved.activeCatalog = _G.LrApplication.activeCatalog
+		saved.currentTime = _G.LrDate.currentTime
+		saved.known = prefs.knownTopLevelKeywords
+		_G.LrDate.currentTime = function()
+			return 0
+		end
+		prefs.knownTopLevelKeywords = { "LrGeniusAI" }
+	end)
+
+	after_each(function()
+		_G.LrApplication.activeCatalog = saved.activeCatalog
+		_G.LrDate.currentTime = saved.currentTime
+		prefs.knownTopLevelKeywords = saved.known
+	end)
+
+	it("sends the user's and the generated keywords, not the taxonomy or the container", function()
+		local species = lrKeyword(Defaults.defaultSpeciesKeyword, 0, {
+			lrKeyword("Animalia", 900, { lrKeyword("Insecta", 800, { lrKeyword("Coleoptera", 700) }) }),
+		})
+		local container = lrKeyword("LrGeniusAI", 50, { lrKeyword("Motocross", 40), lrKeyword("Dirtbike", 30) })
+		local places = lrKeyword("Places", 0, { lrKeyword("Eichenried", 20) })
+		_G.LrApplication.activeCatalog = function()
+			return catalogWith("/vocabulary/one.lrcat", { species, container, places })
+		end
+
+		local names = MetadataManager.collectCatalogKeywordNames(10)
+
+		assert.are.same({ "Dirtbike", "Eichenried", "Motocross" }, names)
+	end)
+
+	it("keeps a container name further down the tree, which the user made", function()
+		local nested = lrKeyword("Software", 0, { lrKeyword("LrGeniusAI", 5), lrKeyword("Species", 4) })
+		_G.LrApplication.activeCatalog = function()
+			return catalogWith("/vocabulary/two.lrcat", { nested })
+		end
+
+		assert.are.same({ "LrGeniusAI", "Species" }, MetadataManager.collectCatalogKeywordNames(10))
+	end)
+end)
+
 -- The SDK wrapper around keywordPath: the prefs list reaches the helper and
 -- the container is gone from what the import sends.
 describe("MetadataManager.getPhotoKeywordHierarchy", function()

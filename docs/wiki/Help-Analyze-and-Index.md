@@ -302,8 +302,23 @@ One checkbox each for **Keywords**, **Title**, **Caption**, **Alt Text**.
   LrGeniusAI knows about; *Retrieve Metadata from Backend* shares the same list.
 - **Bilingual Keywords** — additionally produces keywords in a second language.
 - **Keyword aliases** — reuses keywords already in your catalog instead of
-  creating near-duplicates ("bicycle" vs "bike"). See
+  creating near-duplicates ("bicycle" vs "bike"): the model names synonyms for
+  each keyword, and a keyword whose name or synonym is already in the catalog
+  is reused when it is written. See
   [Keyword Dedup & Declutter](Help-Keyword-Dedup-and-Declutter).
+- **Catalog vocabulary** — sends up to 500 of your catalog's most-used
+  keywords with every photo, asking the model to prefer them over inventing
+  near-synonyms. This is separate from *Keyword aliases*, which only acts on
+  what the model returns. *Automatic* sends it to cloud models and to an
+  *Other AI server*, but not to models on this computer (On this Mac,
+  llama.cpp, Ollama, LM Studio): there the list is most of what the model
+  reads, and a small model copies from it instead of looking at the photo — in
+  one test, Gemma 4 E4B asked for the start numbers on motocross photos
+  returned tulips, meadows and plant families instead. *Always* and *Never*
+  override that. The line under the menu says what *Automatic* does with the
+  model you picked. Two kinds of keyword are never sent: the *Species* branch
+  the species model writes, and the top-level keywords LrGeniusAI files its
+  keywords under.
 
 ### Instructions / Prompt
 

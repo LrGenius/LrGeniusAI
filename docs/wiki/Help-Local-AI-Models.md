@@ -150,7 +150,7 @@ Under the llama.cpp section:
 Context size and photos-in-parallel trade against each other, and the trade is a
 plain division: llama.cpp splits its cache between the photos it decodes at once,
 so **each photo gets context size ÷ photos in parallel**. The prompt — including
-the catalog keywords sent as vocabulary — plus **Max Tokens** has to fit inside
+the catalog keywords, if **Catalog vocabulary** is set to *Always* — plus **Max Tokens** has to fit inside
 that share, not inside the full context. The defaults (8192 and 1) hand the whole
 8192 to one photo; setting two photos in parallel halves it to 4096 each without
 using any more memory. The plug-in reports the per-photo figure next to the
@@ -178,6 +178,12 @@ processes one photo at a time.
   models handle that structure badly — measured on Gemma 4 E4B, the same photo
   produced 19 keywords with plain strings and *zero* with the object form. The
   Analyze & Index dialog warns when you combine them.
+- **Leave Catalog vocabulary on Automatic.** Automatic does not send your
+  catalog's keywords to models on this computer. Five hundred of them are most
+  of what a photo's request carries, and a small model copies from the list
+  instead of looking at the photo: asked for the start numbers on motocross
+  photos, Gemma 4 E4B returned tulips, meadows and plant families, and no
+  number. *Always* sends them anyway.
 - **Quality still trails frontier cloud models** on tricky scenes. If a batch
   comes back weak, compare against `gemini-2.5-flash` on the same 10–20 photos
   before tuning anything else.
@@ -217,8 +223,8 @@ Qwen2.5-VL 3B), or reduce **Photos in parallel** to 1.
 **"the prompt … exceeds the N tokens each photo gets of the context window"**
 The prompt and **Max Tokens** together do not fit one photo's share. Lower **Max
 Tokens**, set **Photos in parallel** to 1 (which hands the whole context to a
-single photo), raise **Context size**, or send fewer catalog keywords as
-vocabulary.
+single photo), raise **Context size**, or — if **Catalog vocabulary** is set to *Always* —
+set it back to *Automatic*.
 
 ---
 

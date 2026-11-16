@@ -152,6 +152,56 @@ function AiProviders.generationSettingsHint(key)
 	return ""
 end
 
+-- Whether the catalog's keywords go to the model as vocabulary. Five hundred
+-- keywords are most of the text a photo's request carries, and a small model
+-- on this computer copies from the list instead of looking at the photo: with
+-- a prompt asking for start numbers, Gemma 4 E4B returned tulips, meadows and
+-- Linnean names for motocross photos, and no number at all. The user's own
+-- server is left to "auto" sending it, since it is as often OpenRouter as a
+-- small model; Never is there for the latter.
+local ON_THIS_COMPUTER = { mlx = true, llamacpp = true, ollama = true, lmstudio = true }
+
+--- The items of the Catalog vocabulary menu.
+AiProviders.KEYWORD_VOCABULARY_ITEMS = {
+	{ title = "Automatic: not for models on this computer", value = "auto" },
+	{ title = "Always", value = "always" },
+	{ title = "Never", value = "never" },
+}
+
+---
+-- Whether a run sends the catalog's keywords to the model as vocabulary.
+--
+-- @param setting string|nil "auto", "always" or "never"; anything else is "auto".
+-- @param key string|nil A stored model choice ("provider::model").
+--
+function AiProviders.sendsKeywordVocabulary(setting, key)
+	if setting == "always" then
+		return true
+	elseif setting == "never" then
+		return false
+	end
+	local provider = AiProviders.splitModelKey(key)
+	return not ON_THIS_COMPUTER[provider]
+end
+
+---
+-- One line under the Catalog vocabulary menu saying what Automatic does with
+-- the chosen model, which is picked on another tab.
+--
+-- @param setting string|nil As for sendsKeywordVocabulary.
+-- @param key string|nil A stored model choice ("provider::model").
+-- @return string Empty unless the setting is Automatic and a model is chosen.
+--
+function AiProviders.keywordVocabularyHint(setting, key)
+	if setting == "always" or setting == "never" or AiProviders.splitModelKey(key) == nil then
+		return ""
+	elseif AiProviders.sendsKeywordVocabulary(setting, key) then
+		return "Sent with the selected model."
+	end
+	return "Not sent with the selected model: models on this computer copy from a long list "
+		.. "instead of looking at the photo."
+end
+
 ---
 -- The name a provider is shown under.
 --
