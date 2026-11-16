@@ -1,272 +1,36 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. The project's rules live in `AGENTS.md`, shared with every other coding agent and imported here; what follows the import is only what Claude Code alone has. A rule that applies to any agent goes into `AGENTS.md`, never here — `scripts/check-docs.py` fails when this file repeats it.
+
+@AGENTS.md
 
 ---
 
-## Project Overview
+## Claude Code
 
-**LrGeniusAI** is an Adobe Lightroom Classic plugin that brings AI-powered photo analysis (tagging, descriptions, semantic search, develop edits, face recognition) into Lightroom. It consists of two main components:
+### Hooks
 
-- **Plugin** (`plugin/LrGeniusAI.lrdevplugin/`) — Lua frontend using the Lightroom SDK
-- **Backend** (`server-rs/`) — a local background process the plugin talks to over HTTP on port 19819. Rust (axum + LanceDB + `ort`/ONNX Runtime), single binary `geniusai-server`. See [server-rs/README.md](server-rs/README.md).
+Wired in `.claude/settings.json`, scripts in `.claude/hooks/`. Fix what a hook reports before moving on — don't disable it to get past a warning.
 
-The backend was previously a Python/Flask server (`server/`); that implementation has been fully removed now that the Rust rewrite is the shipping backend. If you encounter references to a Python backend in older docs, git history, or memory files, treat them as historical.
-
----
-
-## Development Environment Setup
-
-### Backend (Rust)
-
-Standard cargo workspace; the default build needs nothing beyond `rustup`/`cargo`.
-
-```bash
-cd server-rs
-cargo build --release -p lrg-server
-```
-
-**The in-process local LLM is behind the `llamacpp` cargo feature, off by default.** Without it the `llamacpp` provider reports "this backend build has no local-model support" and `/v1/llm/catalog` returns `supported: false` — which is the answer to "why doesn't the Local AI Model section do anything". It is off by default because it compiles llama.cpp from source, so it needs `cmake` and `libclang` (bindgen) and adds minutes to a cold build; anyone touching an unrelated crate should not pay that.
-
-**Which local engine ships is a per-platform decision.** Of the native release builds, **Windows** enables `llamacpp`; the **macOS build is MLX-only** and does not compile the feature at all (see `cargo_features` in the release matrix, `.github/workflows/release.yml`). The Docker images are Linux: the default one has no local engine, the `-vulkan`/`-cuda` variants build `llamacpp-vulkan`/`llamacpp-cuda` (`LLAMACPP` in `server-rs/Dockerfile`, matrix in `.github/workflows/docker-images.yml`). The plugin mirrors that by backend, not by the computer Lightroom runs on: `sectionsForTopOfDialog` and the onboarding wizard build the MLX group box for a backend on this Mac and the llama.cpp one for every other (`LocalModelCatalog.engineFor`), and the provider dropdown needs no special-casing because `/models` reports `llamacpp: []` when the feature is absent. The feature still *builds* on macOS, so enabling it locally to compare the two engines is fine — just don't re-add it to the macOS release job.
-
-```bash
-# Needs cmake + libclang. macOS: libclang ships with the Xcode CLT, `brew install cmake`.
-# Linux: `apt install cmake libclang-dev`. Windows also builds Vulkan (not CUDA — see
-# lrg-llama/Cargo.toml) and additionally needs the Vulkan SDK with VULKAN_SDK set.
-cargo build --release -p lrg-server --features llamacpp
-cargo clippy --workspace --all-targets --features llamacpp   # must also be clean when you touch this path
-```
-
-**MLX (Apple silicon) is a second, separate local backend**, selected as the `mlx` provider. It is *not* behind a cargo feature — `lrg-mlx` only spawns and talks to a helper process, so it costs nothing to compile — but it needs that helper built, and the helper needs `xcodebuild` plus the Metal toolchain (`swift build` cannot compile MLX's Metal shaders):
-
-```bash
-xcodebuild -downloadComponent MetalToolchain          # once per machine
-cd native/mlx-sidecar
-xcodebuild build -scheme lrgenius-mlx -destination 'platform=macOS,arch=arm64' \
-  -configuration Release -derivedDataPath .build/xcode \
-  -skipPackagePluginValidation -skipMacroValidation
-export LRG_MLX_SIDECAR=$PWD/.build/xcode/Build/Products/Release/lrgenius-mlx
-```
-
-Without it, `/v1/llm/catalog` reports `mlx.supported: false` with a reason naming what is missing. See [native/mlx-sidecar/README.md](native/mlx-sidecar/README.md) for the protocol, the model layout (a directory, not a GGUF file), and why MLX has no pinned prompt prefix.
-
-Point llama.cpp at a model with `LRG_LLAMA_MODEL_GGUF` + `LRG_LLAMA_MMPROJ_GGUF` (a GGUF needs both the weights and an `mmproj` vision projector), or download one from the plugin's settings. Discovery also picks up GGUFs already under `~/.lmstudio/models`. The `lrg-llama` tests that exercise a real model are `#[ignore]`d and need `LRG_TEST_MODEL_GGUF`/`LRG_TEST_MMPROJ_GGUF`:
-
-```bash
-cargo test -p lrg-llama --test engine_smoke -- --ignored
-```
-
-When Lightroom is involved, note the plugin auto-launches the *installed* binary (`/Applications/LrGeniusAI/Server/lrgenius-server`), which is not your dev build. `startServer` pings port 19819 first and short-circuits if something already answers, so start your feature-enabled build by hand and the plugin will use it.
-
-`POST /v1/models/clip/downloads` fetches the SigLIP2 NaFlex fp16 ONNX assets from the fixed `model-assets-v2` release tag (not the build's own version tag), which the `model-assets.yml` workflow publishes; until that release exists, a build cannot download the search model. The older fixed-resolution export stays on `model-assets-v1` for older builds. To export them yourself instead, see [server-rs/README.md](server-rs/README.md) for the commands and the env vars that point the server at the files (also covers the face models — YuNet needs no export step, FaceNet does). The export/verify script has its own standalone `uv` project at `server-rs/scripts/` (torch/transformers/open_clip/onnxruntime — a build-time tool, not a runtime dependency of the Rust binary).
-
-### Pre-commit hooks (formatting + linting)
-
-```bash
-uv tool install pre-commit   # installs pre-commit as a uv-managed tool
-pre-commit install           # registers the git hook in this repo
-```
-
-Hooks: StyLua for the plugin, and local `cargo fmt`/`cargo clippy` hooks for `server-rs/` (require a working `rustup`/`cargo` on PATH — see `.pre-commit-config.yaml`).
-
----
-
-## Common Commands
-
-### Backend — lint, test, run
-
-```bash
-cd server-rs
-cargo fmt
-cargo clippy --workspace --all-targets   # must be clean, zero warnings
-cargo test --workspace
-cargo run -p lrg-server -- --db-path /path/to/lrgenius.db --debug
-```
-
-**The ML golden tests skip when their model files are absent, and a skip is
-reported as a pass.** Set `LRG_REQUIRE_GOLDENS` to the families whose assets
-are present (`face`, `auraface`, `facestate`, `subject`, `siglip`, `aesthetic`, `bioclip`, or `all`) to turn that skip into a
-failure — this is what stops CI being green on numerical checks that never ran.
-PR CI provisions the face pair (89 MB) and requires it; the nightly
-`golden-tests-full.yml` fetches every family. If you add a golden test, gate it
-through `crates/lrg-ml/tests/common/assets_ready` rather than an early
-`return`. Families whose data can never be in CI (private or not
-redistributable) are listed in the gate's `LOCAL_ONLY`: `all` leaves them out,
-only naming one explicitly makes its absence a failure. They are `lrg-develop`'s
-local sweeps, each reading a path from its variable: `training-dump`
-(`LRG_DEVELOP_TRAINING_DUMP`, the maintainer's training rows), `lrc-presets`
-(`LRG_LRC_PRESETS_DIR`, Lightroom's bundled presets and profiles),
-`acr-presets` (`LRG_ACR_PRESETS_DIR`, Camera Raw's user folder: its presets and
-profiles) and `xmp-corpus` (`LRG_XMP_CORPUS_DIR`, a private sidecar corpus); see
-`docs/wiki/Dev-Develop-Model.md`.
-
-### Plugin — load into Lightroom
-
-Add (or symlink) `plugin/LrGeniusAI.lrdevplugin` via Lightroom **Plug-in Manager**. Smoke tests run inside Lightroom via `TaskAutomatedTests.lua` (the suites live in `PluginTests.lua`).
-
-### Plugin — test inside Lightroom over MCP
-
-With Lightroom open (the agent bridge starts with it), the same in-Lightroom tests run headless through the backend's MCP endpoint — from an agent (`run_plugin_tests`) or from cargo. Both need the agent token from Plug-in Manager → LrGeniusAI → AI Agents (*Copy token*):
-
-```bash
-cd server-rs
-LRGENIUS_MCP_TOKEN=<token> cargo test -p lrg-mcp --test live_lightroom -- --ignored --test-threads=1   # LRG_LIVE_WRITES=1 adds catalog-writing tests
-```
-
-The plugin uses whatever backend answers on 19819, so stop the installed one and run your build for this. With the plugin loaded from its `.lrdevplugin` folder and *Allow developer commands* ticked, an agent can also `reload_plugin_modules` after editing Lua and probe with `eval_lua` — no Lightroom restart. See [Dev-Agent-Bridge.md](docs/wiki/Dev-Agent-Bridge.md).
-
-The full live test, step by step (every tool, the safety switches, a report), is the runbook `.claude/skills/lrgenius-mcp-full-test/SKILL.md`; `scripts/mcp_call.py` calls single tools from a shell. All of it works on the catalog that is open in Lightroom, so *Live tests in Lightroom* under Key Rules comes first.
-
-### Plugin — headless unit tests
-
-Pure Lua logic (string/table helpers, keyword and photo-id handling) is tested outside Lightroom with [busted]. The Lightroom SDK environment is stubbed in `plugin/spec/spec_helper.lua`.
-
-```bash
-busted                       # runs plugin/spec/*_spec.lua (config in /.busted)
-```
-
-Add tests when you touch pure helpers in `Util.lua` (or any logic that doesn't require live LR objects). CI runs this via `.github/workflows/lua-tests.yml`.
-
----
-
-## Architecture
-
-### Plugin (Lua)
-
-Entry point: `Init.lua` — sets up globals, imports all Lightroom SDK modules, loads shared modules (`Util`, `Defaults`, `ErrorHandler`, `APISearchIndex`, etc.).
-
-**`Task*.lua` files** are the top-level actions triggered from *Library → Plug-in Extras*:
-- `TaskAnalyzeAndIndex.lua` — AI tagging & description
-- `TaskAiEditPhotos.lua` — generate & apply Lightroom develop edits
-- `TaskSemanticSearch.lua` — semantic free-text search
-- `TaskCullPhotos.lua` — burst/duplicate grouping
-- `TaskAutomatedTests.lua` — smoke tests (plugin ↔ backend connectivity)
-
-Not every task builds its interface out of LrView. `TaskPeople.lua` has no
-dialog of its own: the People UI is a page the backend serves at `/v1/ui/people`,
-which the task opens in the browser. Lightroom keeps only what a browser
-cannot do — the page queues actions through `/v1/ui/actions` and the task
-performs them against the catalog. Reach for this when a task is a grid of
-server-side data that LrView cannot re-render (see
-[Dev-Backend-API.md](docs/wiki/Dev-Backend-API.md) for the bridge contract);
-keep settings and short forms native.
-`TaskChat.lua` goes further: the chat page at `/v1/ui/chat` works through
-the agent bridge, which runs whenever Lightroom does, so the task only opens
-a chat and hands the browser its address.
-
-All long-running operations run inside `LrTasks.startAsyncTask`. Use `LrTasks.pcall` (never native `pcall`) so tasks can yield.
-
-Photo identity uses the stable `globalPhotoId` via `Util.getGlobalPhotoIdForPhoto` (metadata-based, cross-catalog consistent). Two globals are defined everywhere: `WIN_ENV` and `MAC_ENV`.
-
-### Backend (Rust) — `server-rs/`
-
-Cargo workspace, one binary (`geniusai-server`) across these crates:
-
-- `lrg-common` — config/CLI, error→envelope, version (baked in via `LRG_BACKEND_*` build-time env vars, `option_env!`), logging+rotation, PID/OK lifecycle handshake.
-- `lrg-store` — LanceDB wrapper, Arrow schemas, `db_path` bind state machine, backup, stats. `lrg-chroma-reader` is migration-only: reads an old ChromaDB directory (WAL + HNSW segment binaries) left over from the retired Python backend, to migrate its data into LanceDB — no Chroma dependency at runtime.
-- `lrg-imaging` — image conversion, EXIF/IPTC/XMP, pHash, culling metrics, a render's tones in numbers for AI Edit (`tone.rs`).
-- `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, YuNet face detection + FaceNet embedding, MediaPipe Face Mesh V2 + Blendshape V2 for eye state, smile and gaze (`face_state.rs`). Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
-- `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
-- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Anthropic — Claude through Anthropic's own Messages API in `anthropic.rs`, not its OpenAI-compatible endpoint, which lists no models and ignores the answer format — Ollama, OpenAI-compatible servers — LM Studio found on this computer, and the user's own "Other AI server" such as OpenRouter, llama.cpp `llama-server` or LiteLLM, both in `openai_compatible.rs`), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
-- `lrg-develop` — the native Lightroom develop model, a leaf crate (no image, network or async dependencies, so `cargo test -p lrg-develop` takes seconds): the key registry (`registry/table.rs`, one `KeySpec` per `crs:` key with type, stored range, UI scale, number format, defaults, policy class, frame scope, file kind), the typed model (`DevelopSettings`, corrections and masks, `Look`, white balance, the policy filter), the readers for `getDevelopSettings()` blobs (`lua::read`) and XMP sidecars, presets and profiles (`xmp::read`, on `roxmltree`), which share their typing and classification rules so both land in the same model, the deterministic develop-preset writer (`xmp::write`), the Lua writer for `applyDevelopSettings` (`lua::write`; provisional until experiments E1/E2/E4/E11, its open choices in `LuaOptions::PROVISIONAL`) — both writers' lossless test modes exist only behind the crate's `test-roundtrip` feature, which only its own dev-dependency enables — and the correction builders (`build`: semantic, gradient and luminance-range masks with SHA-256-derived sync ids). The LLM edit-recipe schema stays in `lrg-providers`, learning/blending in `lrg-analysis::style_engine`. See [Dev-Develop-Model.md](docs/wiki/Dev-Develop-Model.md).
-- `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
-- `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin, the `agent_bridge` that hands MCP tool calls to the plugin (`/v1/agent/*`), and AI Edit's retoucher sessions (`edit_loop.rs`, `/v1/edit/sessions`): a vision model edits through `lrg_providers::chat::ChatModel` with the tools in `lrg_providers::edit_loop`, each edit becomes an `applyDevelopSettings` table through `lrg_develop::build::recipe` and the Lua writer, and the plugin's `EditLoop.lua` applies, renders and hands back each round.
-- `lrg-mcp` — the MCP endpoint (`/mcp`, bearer agent token required) AI agents connect to: tools over the index (calling the REST routes in-process) and over Lightroom (through `agent_bridge` to the plugin's `AgentBridge.lua`/`AgentCommands.lua`, which starts with Lightroom), result sets, prompts, and `geniusai-server mcp`, a stdio proxy for Claude Desktop. See [Dev-Agent-Bridge.md](docs/wiki/Dev-Agent-Bridge.md).
-- `lrg-chat` — the in-app agent chat (`/v1/chat/*`): a local or cloud model works the catalog through the same tools, as an in-memory MCP client of `lrg-mcp`, with the user's approval (`permissions.rs`). The model answers through `lrg_providers::chat::ChatModel`: `cloud_chat.rs` uses each API's own tool calling, and `local_chat.rs` does it by decoding against a JSON Schema, since llama.cpp cannot render the Jinja templates that carry a model's native tool-call format. See [Dev-Agent-Chat.md](docs/wiki/Dev-Agent-Chat.md).
-- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` and `mcp` (stdio proxy) subcommands; merges the `lrg-mcp` and `lrg-chat` routers next to `lrg_api::build_router`'s.
-
-`APISearchIndex.lua` on the plugin side defines the API contract; keep it in sync with any endpoint changes here.
-
-### Data & Identity
-
-- Primary photo identity: file-based `photo_id` (replaces legacy Lightroom UUIDs).
-- Vector search: LanceDB tables `IMAGE_TABLE`/`FACE_TABLE`/`SPECIES_TABLE` in `lrg_store` (SigLIP2, face, and BioCLIP 2 embeddings respectively).
-- Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. A catalog letting go of a photo never deletes its data: only the index cleanup (`lrg_store::cleanup`, run by `IndexCleanup.lua`) purges a photo, after it has been in no catalog for 30 days.
-
----
-
-## Key Rules
-
-### Lua / Plugin
-
-- Use `LrTasks.pcall` — never native `pcall`.
-- GUI strings are plain English. Translations were dropped, so new code writes the finished user-facing string directly. (`LOC(...)` survives in older files, where it just renders its inline default — leave it alone, but don't add more.)
-- Surface all errors to the user via `ErrorHandler.handleError`; no silent failures.
-- Logging: `log:error`, `log:warn`, `log:info`, `log:trace`.
-- New top-level actions must follow the `Task*.lua` naming convention.
-- `APISearchIndex.lua` must be kept in sync with any backend API changes.
-- An agent bridge command (`AgentCommands.lua`) and the MCP tool that sends it (`lrg-mcp`) change together, with the contract table in `docs/wiki/Dev-Agent-Bridge.md`. Commands that change photos are listed in `CHANGES`, so the user's read-only switch covers them.
-- API keys and other secrets go through `Secrets.lua` (LrPasswords), never `prefs`: Lightroom writes prefs to disk as plain text.
-- A field that shows an API key or other secret is an `f:password_field`, never an `f:edit_field`, so the key is never on screen in plain text. `plugin/spec/api_key_fields_spec.lua` checks this for every key in `Secrets.FIELDS` and for the backend's access token.
-- Requests to the backend go through `_request`/`_requestMultipart` in `APISearchIndex.lua`, which add the backend's access token. A call that has to use `LrHttp` directly passes `withAuthHeader(...)` as its headers, and nothing logs a URL or header that carries the token.
-
-### Rust / Backend (`server-rs/`)
-
-- Routes in `lrg-api::routes` (one axum `Router` per domain, merged in `lrg_api::build_router`); business logic in `lrg-analysis`/`lrg-imaging`/`lrg-ml`; LLM/cloud clients in `lrg-providers`; the native Lightroom develop model (key registry, typed model, readers and writers of the Lua and XMP forms) in `lrg-develop`, while the LLM edit-recipe schema stays in `lrg-providers` — a new develop key is a registry row in `lrg-develop`, not a field or a string literal elsewhere.
-- Always use the `log` facade (`log::info!`/`warn!`/`error!`).
-- Manage dependencies via `cargo add`/`cargo remove` (updates `Cargo.toml` + `Cargo.lock`); commit both.
-- Code must pass `cargo fmt` and `cargo clippy --workspace --all-targets` with zero warnings before considering a change done.
-- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed. Every route but a few needs the access token: `curl -H "Authorization: Bearer $(cargo run -q -p lrg-server -- token 2>/dev/null)" …` (see *Access* in `docs/wiki/Dev-Backend-API.md`).
-- A new route is behind the access token (`lrg_api::api_auth`) without anything to do. Exempting one (`exempt` there) is a security decision: say why in its comment and in *Access*.
-
-### Errors must surface
-
-**A log line is not a report.** Anything that goes wrong — a failure, or a
-success that quietly lost a signal — has to travel all the way to a dialog in
-Lightroom. `log::warn!`/`log:warn` is for the record; it is never the only
-place a problem lands.
-
-The chain is: backend detects → puts it in the HTTP response (`error` /
-`error_messages` for failures, `warnings` for degradations) → the API wrapper
-in `APISearchIndex.lua` returns it → the `Task*.lua` caller collects it →
-`ErrorHandler.handleError` or `LrDialogs.message(..., "warning")` shows it.
-Every link is load-bearing; a caller that drops the response's `warnings`
-breaks the chain just as thoroughly as a backend that never sends them.
-
-Concretely, when writing or reviewing this path:
-
-- **A degraded success is not a success.** A photo that indexed without face
-  detection, species, or an embedding must say so. `success_count` going up
-  while the run silently produced worse data is the bug this rule exists for.
-- **Never swallow a response you asked for.** If a wrapper returns
-  `(ok, response)`, the caller reads `response.warnings` even when `ok` is
-  true. Grep for existing callers when you add a warning — a new one is
-  useless if nothing consumes it.
-- **Say what to do, not what happened.** "model not loaded" describes an
-  internal state; "face model is not downloaded yet — run "Download AI
-  models" in Plug-in Manager" is something the user can act on.
-- **Deduplicate and cap, don't drop.** A run-wide cause warns once per photo.
-  Show a handful and count the rest; hiding the rest entirely is not an
-  option.
-- **A single slot loses reports.** Accumulate warnings in a list. One
-  `Option<String>`/variable means the second problem erases the first.
-
-Silence is only acceptable for something the user did not ask for and cannot
-act on — and that decision belongs in a comment at the point where it is made.
-
-### Live tests in Lightroom
-
-- **Never test in a developer's production catalog without their approval.** The MCP tools, `run_plugin_tests`, the `live_lightroom` tests and `eval_lua` all work on whatever catalog is open in Lightroom, so check which one it is (`get_status`) before you start. Unless the developer has told you it is a test catalog — one holding copies, not the originals a production catalog uses — ask first: name the catalog and say what the test would do. That applies to read-only tests too, since they send previews, metadata and the names of recognised people to the agent. Once the developer approves, test there too, within what they approved (read-only, indexing, changes or developer commands). An approval holds for that catalog in that conversation. The full procedure is in `.claude/skills/lrgenius-mcp-full-test/SKILL.md`.
-
-### Docs
-
-- Backend port is 19819 by default
-- **Docs are part of the change, not a follow-up.** `docs/doc-sources.toml` maps each wiki page to the source files it describes; when you touch one of those files, update the page in the same change. If the page is still accurate, say so — either in the PR or with a `Docs-Reviewed: <Page-Name>.md` commit trailer, which is what clears the staleness warning.
-- `scripts/check-docs.py` enforces the parts that can be checked mechanically, and runs in pre-commit and CI (`lint-format.yml`):
-  - every axum route has a heading in `docs/wiki/Dev-Backend-API.md`, and every heading names a real route (method and path both) — **hard failure**
-  - every endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table exists on the backend — **hard failure**, unless it is listed under `[[contract.known_gap]]` in `docs/doc-sources.toml` with a written reason
-  - `AGENTS.md` matches `CLAUDE.md` line for line, apart from the agent-specific lines in `AGENTS_ONLY_LINES` — **hard failure**
-  - pages whose sources have newer commits than the page — **warning**, reported in the CI job summary
-- `scripts/check-docs.py --for <path>` prints the pages that document a file.
-- **The rule files must not disagree.** Three files state this project's rules: `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md`. `CLAUDE.md` is authoritative. `AGENTS.md` is its copy for other coding agents and stays identical line for line, apart from the few agent-specific lines listed in `AGENTS_ONLY_LINES` in `scripts/check-docs.py` — which fails when the two drift, so edit both in the same change. `CONTRIBUTING.md` is the short version for human contributors: it may leave details out, but it never contradicts the other two. Adding, changing or dropping a rule in any of them means updating the others in the same change. If you find them contradicting each other, don't silently follow one — fix the drift, or raise it if the right answer isn't clear.
-
-### Editor automation (Claude Code)
-
-- A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, and `cargo fmt`/`cargo clippy` for `server-rs/` Rust. Fix anything it reports before moving on — don't disable it to get past a warning.
+- **After every edit** (`PostToolUse`, `lint-edited-file.py`) the edited file is linted the way CI lints it, on that file alone: `luacheck` + `stylua` for plugin Lua; `cargo fmt` and `cargo clippy` on the touched crate for `server-rs/` Rust (pre-commit and CI still run clippy on the whole workspace, so a break in a crate that depends on it shows up there); `ruff` for syntax errors and pyflakes findings in Python. An edit to a file behind a hard failure of `scripts/check-docs.py` — a route, `Dev-Backend-API.md`, `APISearchIndex.lua`, `CLAUDE.md`/`AGENTS.md`, a README a wiki page is built from — runs `check-docs.py` at once.
 - The same hook names the wiki pages documenting the edited file (once per page per session). Treat that as part of the task: update the page now, or state that it is still correct.
-- **Ask the language servers before reading files.** `.claude/settings.json` enables rust-analyzer for `server-rs/` and lua-language-server for the plugin; `.luarc.json` sets the latter up for Lightroom's Lua 5.1 and its globals, and leaves out `plugin/spec/`, whose mocks would shadow the real definitions. For "where is X defined, who calls Y, what type is Z", use `workspaceSymbol`, `goToDefinition`, `findReferences`, `incomingCalls` and `hover`, then read only the lines they point to. Grep stays the tool for text (messages, pref keys, JSON fields, route strings, the links between an endpoint in `APISearchIndex.lua` and its axum route) and for code behind `#[cfg(feature = "llamacpp")]`, which rust-analyzer does not compile. rust-analyzer needs about a minute to index a new session, so an empty answer then means "not ready", not "not there". On a large Lua file `documentSymbol` lists every local and every block (Util.lua: about 75 KB); look the name up with `workspaceSymbol` instead.
-- **Subagents** in `.claude/agents/` each run on the model their work needs: `lrg-explore` (Haiku) finds code, `lrg-checks` (Haiku) runs the CI checks and reports only failures, `lrg-docs-sync` (Sonnet) brings the wiki in step with a change, `lrg-rules-reviewer` (Sonnet) checks a change against *Key Rules*, and `lrg-live-tester` (Sonnet) runs the mechanical phases of the live-test runbook. Hand them build output and wide searches rather than reading those in the main conversation; design and implementation stay on the session's model.
-- Other coding agents don't get the hook, the language-server plugins or the subagents. Do the hook's job by hand after editing a file: `pre-commit run --files <path>` for the linters, and `scripts/check-docs.py --for <path>` for the pages to update. Use your own language-server integration where you have one.
+- **Before a live Lightroom test** (`PreToolUse`, `live-test-guard.py`) — running `scripts/mcp_call.py` with any tool but `get_status`, `cargo test` runs that reach the `live_lightroom` tests, requests to `:19819/mcp`, the stdio proxy, the tools of the `lrgeniusai` MCP server — the hook asks the backend which catalog is open. A catalog in `LRG_TEST_CATALOGS` passes; any other, or one it cannot identify, turns the call into a permission prompt that names the catalog, so the developer approves it. The hook reads `LRG_TEST_CATALOGS` from the environment only, where the developer puts it (their shell, or the `env` block of `.claude/settings.local.json`). It backs up *Live tests in Lightroom* above and catches mistakes; it does not replace asking first, and it does not see everything (an endpoint behind `$LRG_MCP_URL`, other MCP clients).
 
-The Lightroom Classic SDK reference, `.claude/rules/lrc-plugin-dev.md`, loads by itself as soon as a plugin `.lua` file is read.
+### Language servers
+
+**Ask the language servers before reading files.** `.claude/settings.json` enables rust-analyzer for `server-rs/` and lua-language-server for the plugin; `.luarc.json` sets the latter up for Lightroom's Lua 5.1 and its globals, and leaves out `plugin/spec/`, whose mocks would shadow the real definitions. For "where is X defined, who calls Y, what type is Z", use `workspaceSymbol`, `goToDefinition`, `findReferences`, `incomingCalls` and `hover`, then read only the lines they point to. Grep stays the tool for text (messages, pref keys, JSON fields, route strings, the links between an endpoint in `APISearchIndex.lua` and its axum route) and for code behind `#[cfg(feature = "llamacpp")]`, which rust-analyzer does not compile. rust-analyzer needs about a minute to index a new session, so an empty answer then means "not ready", not "not there". On a large Lua file `documentSymbol` lists every local and every block (Util.lua: about 75 KB); look the name up with `workspaceSymbol` instead. Questions about how parts connect go to graphify when its graph exists (see *graphify* above).
+
+### Subagents
+
+The agents in `.claude/agents/` each run on the model their work needs: `lrg-explore` (Haiku) finds code, `lrg-checks` (Haiku) runs the CI checks and reports only failures, `lrg-docs-sync` (Sonnet) brings the wiki in step with a change, `lrg-rules-reviewer` (Sonnet) checks a change against *Key Rules*, and `lrg-live-tester` (Sonnet) runs the mechanical phases of the live-test runbook. Hand them build output and wide searches rather than reading those in the main conversation; design and implementation stay on the session's model.
+
+### Skills
+
+The runbooks in `.claude/skills/`, each a slash command:
+
+- `/lrgenius-mcp-full-test` — the full live test inside Lightroom, ending in a report (see *Live tests in Lightroom* above).
+- `/new-endpoint` — a backend route end to end: router, access token, API doc, plugin wrapper, tests, live check.
+- `/new-agent-command` — an agent-bridge command together with the MCP tool that sends it, and the contract table.
+- `/release` — cutting a release: pre-flight, tag, CI, the draft release.
+
+`.claude/rules/lrc-plugin-dev.md`, the Lightroom Classic SDK reference, is path-scoped to `plugin/**/*.lua` and loads by itself.

@@ -9,10 +9,10 @@ Four checks, three of them exact and one advisory:
    that exists. Method and path both have to match.
 2. Every endpoint the plugin calls (the `ENDPOINTS` table in
    `APISearchIndex.lua`) exists on the backend. This one is not really a docs
-   check — it is the plugin/backend contract `CLAUDE.md` asks to keep in sync —
+   check — it is the plugin/backend contract `AGENTS.md` asks to keep in sync —
    but it lives here because it is the same kind of drift.
-3. `AGENTS.md` matches `CLAUDE.md` line for line, apart from the few
-   agent-specific lines in `AGENTS_ONLY_LINES`.
+3. `CLAUDE.md` imports `AGENTS.md`, which holds the rules for every coding
+   agent, and repeats none of it.
 4. Doc pages whose sources have moved on since the page was last touched. This
    is a heuristic, so it only warns. Silence it by updating the page, or, when
    the page really is still correct, with a `Docs-Reviewed: <Page-Name>.md`
@@ -28,7 +28,6 @@ Exit code is 1 when check 1, 2 or 3 fails, or when check 4 fails under --strict.
 from __future__ import annotations
 
 import argparse
-import difflib
 import fnmatch
 import os
 import re
@@ -68,23 +67,12 @@ SERVED_OUTSIDE_ROUTERS = {
     ("DELETE", "/mcp"): "lrg-mcp",
 }
 
-# The only lines where `AGENTS.md` may differ from `CLAUDE.md`: the CLAUDE.md
-# line on the left, its AGENTS.md counterpart on the right. Keep this list
-# short — every entry is a place the two files are allowed to say different
-# things.
-AGENTS_ONLY_LINES = {
-    "# CLAUDE.md": "# AGENTS.md",
-    "This file provides guidance to Claude Code (claude.ai/code) when working "
-    "with code in this repository.": "This file provides guidance to Codex and "
-    "other coding agents when working with code in this repository. It mirrors "
-    "`CLAUDE.md` line for line; `scripts/check-docs.py` fails when the two drift "
-    "apart.",
-    # Claude Code loads the path-scoped rule by itself; other agents need to be told.
-    "The Lightroom Classic SDK reference, `.claude/rules/lrc-plugin-dev.md`, "
-    "loads by itself as soon as a plugin `.lua` file is read.": "Lightroom "
-    "Classic SDK reference: read `.claude/rules/lrc-plugin-dev.md` before "
-    "working on plugin Lua.",
-}
+# The line by which `CLAUDE.md` pulls `AGENTS.md` into Claude Code's context.
+AGENTS_IMPORT = "@AGENTS.md"
+# A line of `AGENTS.md` at least this long that also appears in `CLAUDE.md` is
+# a rule kept in two places — how the two files used to drift apart. Shorter
+# lines (a "---", a list marker, a code fence) repeat innocently.
+REPEAT_MIN_CHARS = 60
 
 
 # --------------------------------------------------------------------------
@@ -275,12 +263,13 @@ def check_generated_pages() -> list[str]:
         return problems
 
 
-def check_agents_mirror() -> list[str]:
-    """`AGENTS.md` is `CLAUDE.md` for every other coding agent; they must agree.
+def check_agents_import() -> list[str]:
+    """`AGENTS.md` holds the rules; `CLAUDE.md` imports it and adds only what
+    is Claude Code's alone.
 
-    Only the lines in `AGENTS_ONLY_LINES` may differ. Everything else is
-    compared verbatim, so a rule added to one file and not the other fails here
-    instead of turning into two contradicting instructions.
+    So `CLAUDE.md` must carry the import, and must not restate `AGENTS.md`: a
+    heading or a long line found in both files is a rule kept in two places,
+    which drift apart the first time someone edits only one of them.
     """
     claude_path, agents_path = REPO / "CLAUDE.md", REPO / "AGENTS.md"
     if not claude_path.exists() or not agents_path.exists():
@@ -288,30 +277,29 @@ def check_agents_mirror() -> list[str]:
     claude = claude_path.read_text(encoding="utf-8").splitlines()
     agents = agents_path.read_text(encoding="utf-8").splitlines()
 
-    problems = [
-        f"scripts/check-docs.py: AGENTS_ONLY_LINES entry {line!r} is no longer "
-        "in CLAUDE.md — update the entry to match"
-        for line in AGENTS_ONLY_LINES
-        if line not in claude
-    ]
-    expected = [AGENTS_ONLY_LINES.get(line, line) for line in claude]
-    if expected != agents:
-        diff = list(
-            difflib.unified_diff(
-                expected,
-                agents,
-                "CLAUDE.md (as AGENTS.md)",
-                "AGENTS.md",
-                n=0,
-                lineterm="",
-            )
-        )
-        shown = "\n    ".join(diff[:12])
-        more = f"\n    ... {len(diff) - 12} more diff lines" if len(diff) > 12 else ""
+    problems = []
+    if AGENTS_IMPORT not in (line.strip() for line in claude):
         problems.append(
-            "AGENTS.md has drifted from CLAUDE.md. Make the same change in both "
-            "files (agent-specific lines are listed in AGENTS_ONLY_LINES in "
-            f"scripts/check-docs.py):\n    {shown}{more}"
+            f"CLAUDE.md does not import AGENTS.md: add the line `{AGENTS_IMPORT}`, "
+            "or Claude Code never reads the project's rules"
+        )
+    shared = {
+        line.strip()
+        for line in agents
+        if line.startswith("#") or len(line.strip()) >= REPEAT_MIN_CHARS
+    }
+    repeated = [
+        f"CLAUDE.md:{number}: {line.strip()[:80]}"
+        for number, line in enumerate(claude, 1)
+        if line.strip() in shared
+    ]
+    if repeated:
+        shown = "\n    ".join(repeated[:8])
+        more = f"\n    ... {len(repeated) - 8} more" if len(repeated) > 8 else ""
+        problems.append(
+            "CLAUDE.md repeats AGENTS.md, which it imports. Keep a rule that "
+            "applies to every coding agent in AGENTS.md only, and in CLAUDE.md "
+            f"only what is Claude Code's alone:\n    {shown}{more}"
         )
     return problems
 
@@ -427,8 +415,8 @@ def main() -> int:
 
     contract_errors, gap_notes = check_plugin_contract()
     page_errors = check_api_doc() + contract_errors + check_generated_pages()
-    mirror_errors = check_agents_mirror()
-    errors = page_errors + mirror_errors
+    rule_file_errors = check_agents_import()
+    errors = page_errors + rule_file_errors
     warnings = check_freshness()
 
     for problem in errors:
@@ -439,7 +427,7 @@ def main() -> int:
         print(f"note: {note}", file=sys.stderr)
 
     if errors or (warnings and args.strict):
-        # The mirror errors carry their own fix; this hint is for the pages.
+        # The rule-file errors carry their own fix; this hint is for the pages.
         if page_errors or (warnings and args.strict):
             print(
                 "\nUpdate the affected page under docs/wiki/, or record that you "

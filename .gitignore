@@ -56,3 +56,7 @@ native/mlx-sidecar/.build/
 # auto-discovery finds the repowise server; not a real file to track
 .mcp.json
 .codex/
+# graphify knowledge graph (rebuildable with `/graphify .`; graph.json alone is
+# ~12 MB and rewritten whole on every build). `graphify hook install` keeps the
+# code part current after each commit.
+graphify-out/

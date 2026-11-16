@@ -6,7 +6,7 @@
 
 This is the LrGeniusAI backend. It's a single binary (`geniusai-server`)
 that speaks the HTTP API the Lightroom plugin expects — see
-[../CLAUDE.md](../CLAUDE.md) for the architecture overview and
+[../AGENTS.md](../AGENTS.md) for the architecture overview and
 [`docs/wiki/Dev-Backend-API.md`](../docs/wiki/Dev-Backend-API.md) for the
 endpoint reference.
 

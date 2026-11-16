@@ -1,6 +1,6 @@
 # Help: Save Edits as AI Training Examples
 
-The **Save Edits as AI Training Examples** workflow lets you teach LrGeniusAI your personal editing style. Your current Lightroom develop settings for selected photos are saved to the backend as labeled examples. They are what **AI Edit Photos** builds its recipes from — without them AI Edit has nothing to work with and refuses to run, so this workflow is the prerequisite for that one, not an optional refinement of it.
+The **Save Edits as AI Training Examples** workflow lets you teach LrGeniusAI your personal editing style. Your current Lightroom develop settings for selected photos are saved to the backend as labeled examples. They are what AI Edit's **My style only** editor builds its recipes from — without them it has nothing to work with and refuses to run — and what the **AI retoucher** starts from when you tick **Start from my own style**. The retoucher also works without them, but then it edits from the model's judgement and the look you pick, not from your own style.
 
 ## How to use it
 
@@ -42,15 +42,21 @@ A free-text summary of what this edit style represents. Helps the AI understand 
 
 ## How it affects AI Edit
 
-Training examples are the entire input to **AI Edit Photos**. The backend finds
-the closest examples by image similarity, re-scores them on exposure, scene type
-and time of day, and interpolates their develop settings into a recipe for the
-photo in front of it. No language model is involved.
+Training examples are the entire input to AI Edit's **My style only** editor.
+The backend finds the closest examples by image similarity, re-scores them on
+exposure, scene type and time of day, and interpolates their develop settings
+into a recipe for the photo in front of it. No language model is involved.
+
+The **AI retoucher** uses the same recipe when **Start from my own style** is
+ticked: your style is round 0, the model sees it next to the original, and it
+only fixes what does not suit the frame. Settings it does not touch keep your
+style's values.
 
 That has two consequences worth knowing:
 
-- **Below five examples, AI Edit will not run.** It stops in the plugin with a
-  pointer back to this workflow. Five is the floor; the style profile is
+- **Below five examples, *My style only* will not run**, and the retoucher's
+  *Start from my own style* is greyed out. *My style only* stops in the plugin
+  with a pointer back to this workflow. Five is the floor; the style profile is
   reported as *Building up* below ten and *Active* from fifty, and the match
   quality follows that curve.
 - **Variety matters as much as volume.** Matching is per photo, so a profile
@@ -123,4 +129,4 @@ choices decide what a photo gets.
 - Save at least 5 well-edited photos per style — that is the Style Engine's minimum — and 10–20 for good results. More diverse examples generalize better.
 - Use consistent labels per shooting genre: one label for weddings, one for portraits, one for landscapes — rather than mixing everything.
 - Re-run the workflow after editing sessions to keep examples fresh and representative.
-- Training examples are not one input among several — they are the only one. AI Edit has no look presets, no style-strength slider and no prompt to fall back on, so whatever the examples say is what the recipe does.
+- For *My style only*, training examples are not one input among several — they are the only one. That editor has no look presets, no style-strength slider and no prompt to fall back on, so whatever the examples say is what the recipe does. (The AI retoucher has looks and your own instructions; with *Start from my own style*, your examples set where it starts.)

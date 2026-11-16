@@ -1304,7 +1304,7 @@ end
 -- Both lists are deduplicated (a run-wide cause otherwise repeats once per
 -- photo) and capped, and the cap *counts* what it hides rather than dropping
 -- it silently — "show a handful and count the rest" per the escalation rules
--- in CLAUDE.md. Warnings previously had no cap at all, so a large run could
+-- in AGENTS.md. Warnings previously had no cap at all, so a large run could
 -- produce a dialog thousands of lines long; errors were capped at 5 but said
 -- nothing about the remainder.
 --

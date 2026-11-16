@@ -224,7 +224,7 @@ is:
   the stronger edit — the one closer to your own — stays.
 - The scorer is a general model of what photographs look good, not of what *you*
   like. Leave this off if you would rather judge the edit yourself, and keep
-  **Review each proposed edit** on to see the recipe before the loop runs.
+  **Review each edit** on to see the recipe before the loop runs.
 
 The cost is a render and a score per strength tried: a few seconds per photo, at
 most four tries. Each try is applied to the photo for real, so it shows up in the

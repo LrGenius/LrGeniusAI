@@ -8,6 +8,15 @@ runs — but only on that one file, so it is fast:
 
   * plugin/**/*.lua        -> luacheck (uses the repo .luacheckrc) + stylua --check
   * server-rs/**/*.rs      -> cargo fmt --check (whole workspace; cheap) + clippy on the touched package
+  * *.py                   -> ruff, syntax errors and pyflakes only (E9, F): the
+                              repo has no Python style policy, so wider rule sets
+                              would report old findings on every edit
+  * the files behind a hard failure in scripts/check-docs.py (routes, the API
+    doc, APISearchIndex.lua, CLAUDE.md/AGENTS.md, the READMEs wiki pages are
+    built from) -> check-docs.py, its errors only
+
+Clippy on one package does not see a break in the crates that depend on it;
+pre-commit and CI still run the whole workspace.
 
 It also names the wiki pages that document the edited file (per
 `docs/doc-sources.toml`), so the docs get updated in the same session as the
@@ -24,10 +33,33 @@ for an unrelated reason, we stay quiet (exit 0) rather than derail the session.
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11: clippy falls back to the whole workspace
+    tomllib = None
+
+# Edits that can break a hard failure in scripts/check-docs.py: the route ↔
+# API-doc and plugin ↔ backend contracts, the wiki pages generated from
+# READMEs, and CLAUDE.md importing AGENTS.md.
+CHECK_DOCS_FILES = frozenset(
+    {
+        "CLAUDE.md",
+        "AGENTS.md",
+        "README.md",
+        "plugin/README.md",
+        "server-rs/README.md",
+        "docs/doc-sources.toml",
+        "docs/wiki/Dev-Backend-API.md",
+        "plugin/LrGeniusAI.lrdevplugin/APISearchIndex.lua",
+        "server-rs/crates/lrg-api/src/lib.rs",
+        "server-rs/crates/lrg-chat/src/routes.rs",
+    }
+)
+CHECK_DOCS_DIRS = ("server-rs/crates/lrg-api/src/routes/",)
 
 
 def _project_dir() -> str:
@@ -53,10 +85,43 @@ def _run(cmd, cwd, timeout=60):
         return False, 0, ""
 
 
+def _cargo_package(path: str, repo: str):
+    """The cargo package owning `path`, or None outside `server-rs/crates/`."""
+    crates = os.path.join(repo, "server-rs", "crates")
+    rel = os.path.relpath(path, crates)
+    if tomllib is None or rel.startswith(".."):
+        return None
+    manifest = os.path.join(crates, rel.split(os.sep)[0], "Cargo.toml")
+    try:
+        with open(manifest, "rb") as fh:
+            return tomllib.load(fh).get("package", {}).get("name")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+
+
+def _check_docs_errors(repo: str):
+    """The `error:` lines of scripts/check-docs.py, with their indented detail."""
+    checker = os.path.join(repo, "scripts", "check-docs.py")
+    if not os.path.exists(checker):
+        return None
+    ran, rc, out = _run([sys.executable, checker], cwd=repo, timeout=90)
+    if not ran or rc == 0:
+        return None
+    kept, keep = [], False
+    for line in out.splitlines():
+        if line.startswith("error:"):
+            keep = True
+        elif not line.startswith((" ", "\t")):
+            keep = False
+        if keep:
+            kept.append(line)
+    return "\n".join(kept) or None
+
+
 def lint(path: str, repo: str):
     """Return a list of problem strings for the given file (empty == clean)."""
     problems = []
-    rel = os.path.relpath(path, repo)
+    rel = os.path.relpath(path, repo).replace(os.sep, "/")
 
     if path.endswith(".lua") and rel.startswith("plugin/"):
         ran, rc, out = _run(["luacheck", path], cwd=repo)
@@ -71,13 +136,28 @@ def lint(path: str, repo: str):
         ran, rc, out = _run(["cargo", "fmt", "--all", "--", "--check"], cwd=server_rs)
         if ran and rc != 0:
             problems.append(f"cargo fmt: file is not formatted.\n{out.strip()}")
+        package = _cargo_package(path, repo)
+        scope = ["-p", package] if package else ["--workspace"]
         ran, rc, out = _run(
-            ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
+            ["cargo", "clippy", *scope, "--all-targets", "--", "-D", "warnings"],
             cwd=server_rs,
             timeout=180,
         )
         if ran and rc != 0:
             problems.append(f"cargo clippy:\n{out.strip()}")
+
+    elif path.endswith(".py"):
+        ran, rc, out = _run(
+            ["ruff", "check", "--isolated", "--select", "E9,F", "--output-format", "concise", path],
+            cwd=repo,
+        )
+        if ran and rc != 0:
+            problems.append(f"ruff:\n{out.strip()}")
+
+    if rel in CHECK_DOCS_FILES or rel.startswith(CHECK_DOCS_DIRS):
+        errors = _check_docs_errors(repo)
+        if errors:
+            problems.append(f"scripts/check-docs.py:\n{errors}")
 
     # The TranslatedStrings_*.txt parity check that used to live here was
     # dropped along with the translation files themselves: the plugin now

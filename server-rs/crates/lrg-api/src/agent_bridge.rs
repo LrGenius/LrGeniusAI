@@ -93,7 +93,7 @@ pub struct PluginInfo {
 
 /// A successful command: what the plugin returned, plus anything that went
 /// partly wrong. Warnings travel with the result rather than into a log so the
-/// agent can tell the user (see "Errors must surface" in CLAUDE.md).
+/// agent can tell the user (see "Errors must surface" in AGENTS.md).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CommandReply {
     pub result: Value,

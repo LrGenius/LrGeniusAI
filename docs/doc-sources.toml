@@ -113,7 +113,7 @@ sources = [
 [page."Dev-Project-README.md"]
 generated_from = "README.md"
 sources = [
-  "CLAUDE.md",
+  "AGENTS.md",
 ]
 
 # --- User-facing help pages, keyed to the task that implements the feature ---
@@ -232,6 +232,22 @@ sources = [
   "plugin/LrGeniusAI.lrdevplugin/PluginTests.lua",
   # The full-test runbook's command-line client (its options and exit codes).
   "scripts/mcp_call.py",
+]
+
+# The tooling AI coding agents work with: Claude Code's half of the rule files,
+# everything under .claude/ that is shared through git, and the checker that
+# holds CLAUDE.md to its import of AGENTS.md. AGENTS.md itself is left out on
+# purpose: nearly every rule change would flag this page, which only describes
+# how the rule files fit together.
+[page."Dev-AI-Tooling.md"]
+sources = [
+  "CLAUDE.md",
+  "scripts/check-docs.py",
+  ".claude/settings.json",
+  ".claude/hooks/*.py",
+  ".claude/agents/*.md",
+  ".claude/skills/*/SKILL.md",
+  ".claude/rules/*.md",
 ]
 
 [page."Dev-Agent-Chat.md"]

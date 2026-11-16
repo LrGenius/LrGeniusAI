@@ -197,9 +197,28 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ### 13. AI Edit Fails Per Photo
 
-AI Edit builds every recipe from your saved training examples and never calls a
-language model, so its failures are about the style profile, not about models
-or prompts.
+What can fail depends on the **Editor**. The **AI retoucher** fails on the AI
+model it runs on. **My style only** never calls a language model, so its
+failures are about the style profile, not about models or prompts.
+
+**AI retoucher**
+
+- **Symptom:** "*‹model›* cannot see images, and AI Edit has to look at the photo. Choose a vision model."
+- **Resolution:** Pick a model that accepts images under **AI model** in the AI
+  Edit dialog. Every cloud provider's current models do; with Ollama, LM Studio
+  or the Other AI server, load a vision model.
+
+- **Symptom:** "*‹model›* did not call apply_edit after 3 answers. Models without tool calling cannot run AI Edit; choose another model." — or "*‹model›* sent edits Lightroom could not use: …".
+- **Resolution:** The model cannot drive the editing tools, which is common with
+  small local models. Choose a larger one; the large cloud models handle the
+  tool calls best. See [Help: AI Edit Photos](Help-AI-Edit#which-model).
+
+- **Symptom:** "Your style could not be matched, so the AI model edited without it: …".
+- **Resolution:** **Start from my own style** was on, but the style engine had
+  nothing for this photo; the retoucher edited it without your style as the
+  starting point. The causes are the ones listed under *My style only* below.
+
+**My style only**
 
 - **Symptom:** "Style engine inactive: only N training example(s) available".
 - **Resolution:** Save more edits via *Save Edits as AI Training Examples*. Five
@@ -218,6 +237,8 @@ or prompts.
 - **Resolution:** The photo did not resemble anything you trained on. Make sure
   the photos are indexed (**Enable smart photo search**) so the visual match has
   an embedding to work with, and train on the kind of material you want edited.
+
+**Either editor**
 
 - **Symptom:** "HTTP status: 500" with "database not initialized".
 - **Resolution:** The backend has no catalog database bound yet. Open the
