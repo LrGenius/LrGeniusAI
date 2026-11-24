@@ -295,7 +295,11 @@ One checkbox each for **Keywords**, **Title**, **Caption**, **Alt Text**.
 - **Use existing catalog structure** — takes the categories from the keyword
   hierarchy already in your catalog rather than the built-in list. Be careful
   with large or messy hierarchies: everything you have gets offered to the
-  model.
+  model. Two branches are not offered: the *Species* branch the species model
+  writes, and the top-level keywords LrGeniusAI files its keywords under —
+  the categories inside those are offered as categories of their own, so new
+  keywords land next to the existing ones instead of in a second
+  "LrGeniusAI" inside the first.
 - **Top-level Keyword** — nests everything generated under one keyword of your
   choosing, so AI keywords stay separable from your own. Its drop-down menu
   offers the ones you used recently, then the other top-level keywords

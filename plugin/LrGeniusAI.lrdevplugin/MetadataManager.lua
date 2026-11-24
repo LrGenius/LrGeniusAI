@@ -824,17 +824,31 @@ function MetadataManager.addKeywordRecursively(
 
 	local addKeywords = {}
 	local reservedTopLevel = currentTopLevelKeyword or prefs.topLevelKeyword
+	local reservedKey = type(reservedTopLevel) == "string" and Util.trim(reservedTopLevel):lower() or nil
+	local function isReservedTopLevel(name)
+		return reservedKey ~= nil and reservedKey ~= "" and Util.trim(name):lower() == reservedKey
+	end
 	for key, value in pairs(keywordSubTable) do
 		local keyword
 		if type(key) == "string" and key ~= "" and key ~= "None" and key ~= "none" and prefs.useKeywordHierarchy then
-			keyword = createKeywordSafely(catalog, key, {}, false, parent, sessionCache)
-			if not keyword then
-				table.insert(
-					warnings,
-					'Could not create the keyword category "'
-						.. key
-						.. '", so the keywords under it were not filed there.'
-				)
+			if isReservedTopLevel(key) then
+				-- A category named like the top-level keyword is the container echoed
+				-- back, from a catalog structure or a stored hierarchy that still held
+				-- it. Creating it filed everything under "LrGeniusAI > LrGeniusAI"
+				-- (#490). Its contents go where they belong instead, so nothing is
+				-- lost and there is nothing to report: `keyword` stays nil, and the
+				-- recursion below hands them `parent`.
+				log:trace("Not creating category " .. tostring(key) .. ": it is the top-level keyword.")
+			else
+				keyword = createKeywordSafely(catalog, key, {}, false, parent, sessionCache)
+				if not keyword then
+					table.insert(
+						warnings,
+						'Could not create the keyword category "'
+							.. key
+							.. '", so the keywords under it were not filed there.'
+					)
+				end
 			end
 		elseif type(key) == "number" and value then
 			local keywordName, keywordSynonyms, keywordAliases, keywordSynonymAliases = parseKeywordLeaf(value)
@@ -845,7 +859,7 @@ function MetadataManager.addKeywordRecursively(
 						or keywordName == "LMStudio"
 						or keywordName == "Google Gemini"
 						or keywordName == "ChatGPT"
-						or keywordName == reservedTopLevel
+						or isReservedTopLevel(keywordName)
 					then
 						log:trace("Skipping keyword: " .. tostring(keywordName) .. " as it is reserved.")
 					else
@@ -1139,34 +1153,6 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 end
 
 ---
--- Get the keyword hierarchy from the Lightroom catalog.
--- Only keywords with children will be returned.
--- @return A table representing the keyword hierarchy.
-function MetadataManager.getCatalogKeywordHierarchy()
-	local catalog = LrApplication.activeCatalog()
-	local topKeywords = catalog:getKeywords()
-	local hierarchy = {}
-
-	local function traverseKeywords(keywords, parentHierarchy)
-		for _, keyword in ipairs(keywords) do
-			-- if not Util.table_contains(prefs.knownTopLevelKeywords, keyword) and not Util.table_contains(keyword:getSynonyms(), Defaults.topLevelKeywordSynonym) then
-			local children = keyword:getChildren()
-			if #children > 0 then
-				local keywordEntry = {}
-				parentHierarchy[keyword:getName()] = keywordEntry
-				traverseKeywords(children, keywordEntry)
-			end
-			-- end
-		end
-	end
-
-	traverseKeywords(topKeywords, hierarchy)
-
-	-- log:trace("Keyword hierarchy: " .. Util.dumpTable(hierarchy))
-	return hierarchy
-end
-
----
 -- Whether a root keyword is one of the containers the plugin files generated
 -- keywords under ("LrGeniusAI", "ChatGPT", ...), rather than a keyword of the
 -- user's own.
@@ -1287,6 +1273,90 @@ function MetadataManager.vocabularyRootExclusion(keyword, access)
 		return "self"
 	end
 	return nil
+end
+
+---
+-- The keyword categories the catalog already has, for "Use existing catalog
+-- structure": every keyword with children, as parent name -> child table.
+--
+-- The roots MetadataManager.vocabularyRootExclusion names are left out, as in
+-- the vocabulary. A plugin container ("LrGeniusAI", ...) is not a category:
+-- the keywords are filed under it anyway, so a category of that name made
+-- applyMetadata create "LrGeniusAI > LrGeniusAI > ..." and put every new
+-- keyword there (#490). Its children become root categories instead, merged
+-- with a root category of the same name. A container directly inside a
+-- container — the "LrGeniusAI > LrGeniusAI" that bug left in catalogs — is
+-- lifted the same way, so a damaged catalog stops asking for more of it. The
+-- species taxonomy is no category for the LLM either; naming species is the
+-- species model's job.
+--
+-- Pure apart from `access`: see `plugin/spec/metadata_manager_spec.lua`.
+--
+-- @param roots table The root keywords (catalog:getKeywords()).
+-- @param access table As for MetadataManager.keywordPath, plus
+--   `getChildren(k)` -> table|nil; `getParent` is not used.
+-- @return table The hierarchy.
+function MetadataManager.catalogKeywordHierarchy(roots, access)
+	local hierarchy = {}
+
+	-- `level` is "root", "container" (directly inside a lifted container) or nil.
+	local function exclusionOf(keyword, level)
+		if level == "root" then
+			return MetadataManager.vocabularyRootExclusion(keyword, access)
+		elseif level == "container" and isTopLevelContainer(keyword, access) then
+			return "self"
+		end
+		return nil
+	end
+
+	local function traverse(keywords, into, level)
+		if type(keywords) ~= "table" then
+			return
+		end
+		for _, keyword in ipairs(keywords) do
+			local exclusion = exclusionOf(keyword, level)
+			local children = access.getChildren(keyword)
+			if exclusion == "self" then
+				traverse(children, into, "container")
+			elseif exclusion ~= "subtree" and type(children) == "table" and #children > 0 then
+				local name = access.getName(keyword)
+				if type(name) == "string" and name ~= "" then
+					-- Reuse an entry of the same name: a container's children land next
+					-- to the user's own root categories, which may share their names.
+					into[name] = into[name] or {}
+					traverse(children, into[name], nil)
+				end
+			end
+		end
+	end
+
+	traverse(roots, hierarchy, "root")
+	return hierarchy
+end
+
+---
+-- Get the keyword hierarchy from the Lightroom catalog.
+-- Only keywords with children will be returned; see
+-- MetadataManager.catalogKeywordHierarchy for what is left out.
+-- @return A table representing the keyword hierarchy.
+function MetadataManager.getCatalogKeywordHierarchy()
+	local catalog = LrApplication.activeCatalog()
+	local access = lrKeywordAccess()
+	access.getName = function(keyword)
+		local ok, name = LrTasks.pcall(function()
+			return keyword:getName()
+		end)
+		return ok and name or nil
+	end
+	access.getChildren = function(keyword)
+		-- getChildren() is known to throw on some catalogs (see
+		-- findKeywordOnPhotoForParent); a failure just prunes that subtree.
+		local ok, children = LrTasks.pcall(function()
+			return keyword:getChildren()
+		end)
+		return ok and children or nil
+	end
+	return MetadataManager.catalogKeywordHierarchy(catalog:getKeywords(), access)
 end
 
 ---

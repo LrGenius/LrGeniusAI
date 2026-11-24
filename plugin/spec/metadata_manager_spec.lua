@@ -420,3 +420,222 @@ describe("MetadataManager.getPhotoKeywordHierarchy", function()
 		assert.are.same({}, MetadataManager.getPhotoKeywordHierarchy(photoWith(nil)))
 	end)
 end)
+
+-- "Use existing catalog structure" sends the catalog's keyword tree as the
+-- categories the model files keywords under. The plugin's container used to
+-- be one of them, so the model answered with a "LrGeniusAI" category, which
+-- applyMetadata then created under the container itself (#490).
+describe("MetadataManager.catalogKeywordHierarchy", function()
+	require("Defaults")
+	local hierarchyOf = MetadataManager.catalogKeywordHierarchy
+
+	local function kw(name, children, synonyms)
+		return { name = name, children = children or {}, synonyms = synonyms }
+	end
+
+	local access = {
+		getName = function(k)
+			return k.name
+		end,
+		getChildren = function(k)
+			return k.children
+		end,
+		getSynonyms = function(k)
+			return k.synonyms
+		end,
+		topLevelNames = { "LrGeniusAI", "ChatGPT" },
+	}
+
+	it("files the container's categories at the root, not under a category named like it", function()
+		local container = kw("LrGeniusAI", {
+			kw("Activities", { kw("Hiking") }),
+			kw("Animals", { kw("Dog") }),
+			kw("Sunset"),
+		})
+
+		assert.are.same({ Activities = {}, Animals = {} }, hierarchyOf({ container }, access))
+	end)
+
+	it("merges a container's category into the user's root category of the same name", function()
+		local roots = {
+			kw("Places", { kw("Germany", { kw("Berlin") }) }),
+			kw("LrGeniusAI", { kw("Places", { kw("France", { kw("Paris") }) }) }),
+		}
+
+		assert.are.same({ Places = { Germany = {}, France = {} } }, hierarchyOf(roots, access))
+	end)
+
+	it("recognises a container by its synonym, whatever it is called", function()
+		local container = kw("My AI", { kw("Moods", { kw("Calm") }) }, { Defaults.topLevelKeywordSynonym })
+
+		assert.are.same({ Moods = {} }, hierarchyOf({ container }, access))
+	end)
+
+	it("lifts the doubled container an earlier run left inside the container", function()
+		local doubled = kw("LrGeniusAI", {
+			kw("LrGeniusAI", { kw("Activities", { kw("Hiking") }) }),
+			kw("Activities", { kw("Cycling") }),
+		})
+
+		assert.are.same({ Activities = {} }, hierarchyOf({ doubled }, access))
+	end)
+
+	it("leaves out the species taxonomy", function()
+		local species = kw(Defaults.defaultSpeciesKeyword, { kw("Animalia", { kw("Chordata", { kw("Aves") }) }) })
+
+		assert.are.same({}, hierarchyOf({ species }, access))
+	end)
+
+	it("keeps a container name below the root, which the user made", function()
+		local software = kw("Software", { kw("LrGeniusAI", { kw("Plugins") }), kw("Species", { kw("X") }) })
+
+		assert.are.same({ Software = { LrGeniusAI = {}, Species = {} } }, hierarchyOf({ software }, access))
+	end)
+
+	it("prunes a subtree whose children cannot be read", function()
+		local broken = kw("Broken")
+		broken.children = nil
+
+		assert.are.same({ Places = {} }, hierarchyOf({ broken, kw("Places", { kw("Berlin") }) }, access))
+	end)
+end)
+
+-- Applying a response that still carries the container as a category: from a
+-- catalog structure sent before the fix, or a hierarchy the backend stored
+-- then and "Retrieve Metadata" writes back.
+describe("MetadataManager.addKeywordRecursively", function()
+	local saved = {}
+
+	local function newKeyword(name, parent)
+		local k = { name = name, parent = parent, children = {} }
+		k.getName = function()
+			return k.name
+		end
+		k.getParent = function()
+			return k.parent
+		end
+		k.getChildren = function()
+			return k.children
+		end
+		k.getSynonyms = function()
+			return {}
+		end
+		k.setAttributes = function() end
+		return k
+	end
+
+	local function fakeCatalog()
+		local catalog = { roots = {} }
+		catalog.getKeywords = function()
+			return catalog.roots
+		end
+		catalog.createKeyword = function(_, name, _, _, parent, _)
+			local siblings = parent and parent.children or catalog.roots
+			for _, existing in ipairs(siblings) do
+				if existing.name == name then
+					return existing
+				end
+			end
+			local created = newKeyword(name, parent)
+			table.insert(siblings, created)
+			return created
+		end
+		return catalog
+	end
+
+	local function fakePhoto()
+		local photo = { keywords = {} }
+		photo.getRawMetadata = function()
+			return photo.keywords
+		end
+		photo.addKeyword = function(_, k)
+			table.insert(photo.keywords, k)
+		end
+		return photo
+	end
+
+	local function path(k)
+		local names = {}
+		while k do
+			table.insert(names, 1, k.name)
+			k = k.parent
+		end
+		return table.concat(names, " > ")
+	end
+
+	local function pathsOn(photo)
+		local paths = {}
+		for _, k in ipairs(photo.keywords) do
+			table.insert(paths, path(k))
+		end
+		table.sort(paths)
+		return paths
+	end
+
+	before_each(function()
+		saved.hierarchy = prefs.useKeywordHierarchy
+		saved.topLevel = prefs.topLevelKeyword
+		prefs.useKeywordHierarchy = true
+		prefs.topLevelKeyword = "LrGeniusAI"
+	end)
+
+	after_each(function()
+		prefs.useKeywordHierarchy = saved.hierarchy
+		prefs.topLevelKeyword = saved.topLevel
+	end)
+
+	it("files a category named like the top-level keyword under the top-level keyword itself", function()
+		local catalog = fakeCatalog()
+		local photo = fakePhoto()
+		local top = catalog:createKeyword("LrGeniusAI", {}, false, nil, true)
+		local warnings = {}
+
+		MetadataManager.addKeywordRecursively(photo, catalog, {
+			LrGeniusAI = { Activities = { "Hiking" } },
+			Animals = { "Dog" },
+		}, top, nil, "LrGeniusAI", {}, warnings)
+
+		assert.are.same({ "LrGeniusAI > Activities > Hiking", "LrGeniusAI > Animals > Dog" }, pathsOn(photo))
+		for _, child in ipairs(top.children) do
+			assert.are_not.equal("LrGeniusAI", child.name)
+		end
+		assert.are.same({}, warnings)
+	end)
+
+	it("matches the top-level keyword without regard to case", function()
+		local catalog = fakeCatalog()
+		local photo = fakePhoto()
+		local top = catalog:createKeyword("LrGeniusAI", {}, false, nil, true)
+
+		MetadataManager.addKeywordRecursively(
+			photo,
+			catalog,
+			{ lrgeniusai = { Moods = { "Calm" } } },
+			top,
+			nil,
+			"LrGeniusAI",
+			{},
+			{}
+		)
+
+		assert.are.same({ "LrGeniusAI > Moods > Calm" }, pathsOn(photo))
+	end)
+
+	it("puts the categories at the root when there is no top-level keyword", function()
+		local catalog = fakeCatalog()
+		local photo = fakePhoto()
+
+		MetadataManager.addKeywordRecursively(
+			photo,
+			catalog,
+			{ LrGeniusAI = { Activities = { "Hiking" } } },
+			nil,
+			nil,
+			nil,
+			{},
+			{}
+		)
+
+		assert.are.same({ "Activities > Hiking" }, pathsOn(photo))
+	end)
+end)
