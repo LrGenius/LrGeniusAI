@@ -550,7 +550,16 @@ export LRG_LLAMA_GPU_LAYERS=999   # 0 = CPU only; anything that does not fit sta
 `n_ctx` and `n_parallel` trade against each other: the whole group of
 photos has to fit the context window alongside the shared prompt prefix, and
 the engine reduces `n_parallel` with a warning rather than overrunning it.
-Changing any of these reloads the model on the next request.
+Changing any of these reloads the model on the next request, and the log
+names what changed (`Reloading local LLM because the request asks for other
+settings: n_ctx 8192 -> 16384`).
+
+Max Tokens is a ceiling, not a reservation: when a photo's prompt plus Max
+Tokens overruns its share of the window, the answer gets what is left of the
+share instead (a warning says so once per run). A photo is refused before any
+decode only when fewer than 256 tokens would be left, and the error names
+what fills the window — the photo (Qwen2.5-VL spends more tokens on a larger
+image) or the text (system prompt, keyword taxonomy, catalog vocabulary).
 
 A note on chat templates: llama.cpp's C API applies only templates it
 recognises, so a model shipping a modern Jinja template (Gemma 4's is 18 KB

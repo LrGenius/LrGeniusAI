@@ -155,9 +155,12 @@ that share, not inside the full context. The defaults (8192 and 1) hand the whol
 8192 to one photo; setting two photos in parallel halves it to 4096 each without
 using any more memory. The plug-in reports the per-photo figure next to the
 loaded model. The backend reduces the parallel count with a warning rather than
-overrunning it, and refuses a request that cannot fit rather than failing partway
-through. Leave the fields empty for sensible defaults. Changing any of them
-reloads the model on the next request.
+overrunning it. **Max Tokens** is a ceiling: when it does not fit beside a
+photo's prompt, the answer gets the rest of that photo's share instead — an
+answer needs a few hundred tokens, so this rarely matters. Only a prompt that
+leaves fewer than 256 tokens for the answer is refused, before the model runs.
+Leave the fields empty for sensible defaults. Changing any of them reloads the
+model on the next request.
 
 **MLX has no equivalent knobs**, and that is a deliberate limitation rather than
 an oversight: when indexing, the MLX decoder allocates a fresh cache per photo,
@@ -220,11 +223,14 @@ an interrupted download is discarded rather than offered as a broken model.
 The model is too large for your RAM. Move down a size (Gemma 4 E2B or
 Qwen2.5-VL 3B), or reduce **Photos in parallel** to 1.
 
-**"the prompt … exceeds the N tokens each photo gets of the context window"**
-The prompt and **Max Tokens** together do not fit one photo's share. Lower **Max
-Tokens**, set **Photos in parallel** to 1 (which hands the whole context to a
-single photo), raise **Context size**, or — if **Catalog vocabulary** is set to *Always* —
-set it back to *Automatic*.
+**"this photo's prompt is … tokens, which leaves … for the answer"**
+The prompt alone fills nearly all of one photo's share, so no answer fits —
+lowering **Max Tokens** does not help. Raise **Context size**, or set **Photos in
+parallel** to 1 (which hands the whole context to a single photo). The message
+says what fills the window: when it is *the photo itself* (Qwen2.5-VL spends
+several thousand tokens on a large image, Gemma a few hundred), choose a smaller
+export size; when it is *the text*, shrink the keyword taxonomy, or — if
+**Catalog vocabulary** is set to *Always* — set it back to *Automatic*.
 
 ---
 

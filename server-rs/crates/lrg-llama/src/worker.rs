@@ -80,6 +80,17 @@ const PREFIX_SEQ: i32 = 0;
 /// slower, but it produces results rather than `NoKvCacheSlot`.
 const MIN_CTX_PER_SEQ: u32 = 4096;
 
+/// The smallest answer a photo is given room for. Max Tokens is clamped down
+/// to what is left of the photo's window after its prompt, but below this a
+/// keyword list and a caption are cut off mid-JSON, so the photo is refused
+/// before any decode instead. A successful answer runs to roughly 45–350
+/// tokens.
+const MIN_OUTPUT_TOKENS: u32 = 256;
+
+/// Positions kept free past the answer when Max Tokens is clamped, so the
+/// clamped budget never runs the sequence right up to the end of its window.
+const OUTPUT_SAFETY_MARGIN: u32 = 8;
+
 struct PinnedPrefix {
     hash: u64,
     len: i32,
@@ -332,6 +343,7 @@ pub(crate) fn run(
         conversation: None,
         n_parallel,
         n_ctx_seq: i32::try_from(n_ctx_seq).unwrap_or(i32::MAX),
+        clamp_reported: None,
     };
 
     // `recv` fails once the engine handle is dropped: that is the shutdown signal.
@@ -449,6 +461,10 @@ struct WorkerState<'a> {
     /// The per-photo window, i.e. what every budget check has to measure
     /// against. Never `ctx.n_ctx()`, which is the whole cache.
     n_ctx_seq: i32,
+    /// The Max Tokens value the clamp was last reported for. A run clamps
+    /// every photo the same way, and one warning says it; a line per photo
+    /// would bury the rest of the log.
+    clamp_reported: Option<u32>,
 }
 
 impl WorkerState<'_> {
@@ -788,6 +804,29 @@ impl WorkerState<'_> {
         Ok(())
     }
 
+    /// [`fit_output_budget`] against this engine's per-photo window, saying
+    /// so when Max Tokens had to give way.
+    fn output_budget(&mut self, prompt: PromptSize, max_tokens: u32) -> Result<u32, LlamaError> {
+        let budget = fit_output_budget(prompt, max_tokens, self.n_ctx_seq)?;
+        if budget < max_tokens {
+            let message = format!(
+                "Max Tokens {max_tokens} does not fit beside a {}-token photo prompt in the {} \
+                 tokens each photo gets of the context window; answering in at most {budget} \
+                 tokens instead. A complete answer needs a few hundred, so this costs nothing \
+                 unless the model rambles. Raise Context size for more room.",
+                prompt.total(),
+                self.n_ctx_seq
+            );
+            if self.clamp_reported == Some(max_tokens) {
+                log::debug!("{message}");
+            } else {
+                self.clamp_reported = Some(max_tokens);
+                log::warn!("{message} (Logged once per run.)");
+            }
+        }
+        Ok(budget)
+    }
+
     fn prefill_one(
         &mut self,
         ctx: &mut LlamaContext,
@@ -827,11 +866,10 @@ impl WorkerState<'_> {
             (0, whole, true)
         };
 
-        let n_ctx_seq = self.n_ctx_seq;
         let n_batch = i32::try_from(ctx.n_batch()).unwrap_or(512);
         let mut sampler = self.build_sampler(request.schema.as_ref(), request.temperature)?;
 
-        let (n_past, tail_tokens) = match self.mtmd {
+        let (n_past, tail_tokens, budget) = match self.mtmd {
             Some(mtmd) => {
                 let bitmap = match &request.image {
                     Some(image) => Some(
@@ -854,13 +892,19 @@ impl WorkerState<'_> {
                         LlamaError::Prompt(format!("preparing the photo prompt failed: {e}"))
                     })?;
                 let tail_tokens = i32::try_from(chunks.total_tokens()).unwrap_or(i32::MAX);
-                check_budget(prefix_len, tail_tokens, request.max_tokens, n_ctx_seq)?;
+                let image = image_tokens(&chunks);
+                let size = PromptSize {
+                    fixed: prefix_len,
+                    text: prefix_len + tail_tokens - image,
+                    image,
+                };
+                let budget = self.output_budget(size, request.max_tokens)?;
                 let n_past = chunks
                     .eval_chunks(mtmd, ctx, prefix_len, seq_id, n_batch, true)
                     .map_err(|e| {
                         LlamaError::Inference(format!("evaluating the photo prompt failed: {e}"))
                     })?;
-                (n_past, tail_tokens)
+                (n_past, tail_tokens, budget)
             }
             None => {
                 let bos = if add_special {
@@ -872,7 +916,12 @@ impl WorkerState<'_> {
                     LlamaError::Prompt(format!("tokenizing the prompt failed: {e}"))
                 })?;
                 let tail_tokens = i32::try_from(tokens.len()).unwrap_or(i32::MAX);
-                check_budget(prefix_len, tail_tokens, request.max_tokens, n_ctx_seq)?;
+                let size = PromptSize {
+                    fixed: prefix_len,
+                    text: prefix_len + tail_tokens,
+                    image: 0,
+                };
+                let budget = self.output_budget(size, request.max_tokens)?;
 
                 let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
                 for (offset, token) in tokens.iter().enumerate() {
@@ -886,7 +935,7 @@ impl WorkerState<'_> {
                 ctx.decode(&mut batch).map_err(|e| {
                     LlamaError::Inference(format!("evaluating the prompt failed: {e}"))
                 })?;
-                (prefix_len + tail_tokens, tail_tokens)
+                (prefix_len + tail_tokens, tail_tokens, budget)
             }
         };
 
@@ -913,7 +962,7 @@ impl WorkerState<'_> {
             text: String::new(),
             bytes: Vec::new(),
             sampler,
-            budget: request.max_tokens.max(1),
+            budget,
             next_input: None,
             logit_idx: -1,
             done: false,
@@ -1439,25 +1488,104 @@ fn check_chat_budget(
     Ok(())
 }
 
+/// What one photo's prompt is made of, in tokens.
+#[derive(Debug, Clone, Copy)]
+struct PromptSize {
+    /// The pinned run-constant part (system prompt, keyword taxonomy, catalog
+    /// vocabulary). Zero when the prompt could not be split and was evaluated
+    /// whole, in which case all of its text counts as `text`.
+    fixed: i32,
+    /// Every text token, `fixed` included.
+    text: i32,
+    /// The photo, as the projector encodes it. A fixed count for Gemma; for
+    /// Qwen2.5-VL it grows with the image's size, which is why the same photo
+    /// costs that model three to four times the tokens.
+    image: i32,
+}
+
+impl PromptSize {
+    fn total(self) -> i64 {
+        i64::from(self.text) + i64::from(self.image)
+    }
+}
+
+/// The output budget a photo actually gets: Max Tokens, clamped to what its
+/// window has left after the prompt.
+///
 /// `n_ctx_seq` is the window *one photo* gets, not the whole cache — see
-/// [`ctx_per_seq`].
-fn check_budget(
-    prefix_len: i32,
-    tail_tokens: i32,
+/// [`ctx_per_seq`]. Max Tokens is a ceiling, not a request for that many
+/// tokens: a successful answer needs a few hundred, so refusing every photo
+/// whose prompt plus Max Tokens overruns the window failed whole runs before
+/// the model was ever asked (issue #490). Only a prompt that leaves less than
+/// [`MIN_OUTPUT_TOKENS`] is refused, and the error names what actually fills
+/// the window.
+fn fit_output_budget(
+    prompt: PromptSize,
     max_tokens: u32,
     n_ctx_seq: i32,
-) -> Result<(), LlamaError> {
-    let needed = i64::from(prefix_len) + i64::from(tail_tokens) + i64::from(max_tokens);
-    if needed > i64::from(n_ctx_seq) {
-        return Err(LlamaError::ContextOverflow(format!(
-            "the prompt ({} tokens) plus the requested {max_tokens} output tokens exceeds the \
-             {n_ctx_seq} tokens each photo gets of the context window. Lower Max Tokens, shrink \
-             the keyword taxonomy, lower Photos in parallel, or raise the context size in the \
-             plugin settings.",
-            prefix_len + tail_tokens
-        )));
+) -> Result<u32, LlamaError> {
+    let room = i64::from(n_ctx_seq) - prompt.total() - i64::from(OUTPUT_SAFETY_MARGIN);
+    let requested = max_tokens.max(1);
+    if room >= i64::from(requested) {
+        return Ok(requested);
     }
-    Ok(())
+    // An explicitly small Max Tokens is the user's call; only the clamp is
+    // held to the minimum.
+    if room >= i64::from(MIN_OUTPUT_TOKENS.min(requested)) {
+        return Ok(u32::try_from(room).unwrap_or(requested));
+    }
+    Err(LlamaError::ContextOverflow(overflow_message(
+        prompt, room, n_ctx_seq,
+    )))
+}
+
+/// Why a photo's prompt does not leave room for an answer, naming the part
+/// that is large. The keyword taxonomy is the lever only when the text is what
+/// fills the window; with Qwen2.5-VL it is usually the photo.
+fn overflow_message(prompt: PromptSize, room: i64, n_ctx_seq: i32) -> String {
+    let total = prompt.total();
+    let left = room.max(0);
+    let head = format!(
+        "this photo's prompt is {total} tokens, which leaves {left} of the {n_ctx_seq} tokens \
+         each photo gets of the context window for the answer (at least {MIN_OUTPUT_TOKENS} \
+         are needed)."
+    );
+    if i64::from(prompt.image) >= i64::from(prompt.text) {
+        format!(
+            "{head} The photo itself takes {} of them: this model spends more tokens on a larger \
+             image. Raise Context size in Plug-in Manager (or set Photos in parallel to 1), or \
+             choose a smaller export size.",
+            prompt.image
+        )
+    } else {
+        let fixed = if prompt.fixed > 0 {
+            format!(
+                " ({} of them the system prompt, keyword taxonomy and catalog vocabulary)",
+                prompt.fixed
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "{head} The text takes {}{fixed}. Raise Context size in Plug-in Manager (or set \
+             Photos in parallel to 1), shrink the keyword taxonomy, or set Catalog vocabulary to \
+             Automatic.",
+            prompt.text
+        )
+    }
+}
+
+/// Image tokens in a tokenized prompt: every chunk that is not text.
+fn image_tokens(chunks: &MtmdInputChunks) -> i32 {
+    let mut total = 0usize;
+    for index in 0..chunks.len() {
+        if let Some(chunk) = chunks.get(index) {
+            if !matches!(chunk.chunk_type(), MtmdInputChunkType::Text) {
+                total += chunk.n_tokens();
+            }
+        }
+    }
+    i32::try_from(total).unwrap_or(i32::MAX)
 }
 
 /// `LlamaError` is not `Clone` by design (it wraps opaque native failures), but
@@ -1541,18 +1669,90 @@ mod tests {
         assert!(err.contains("Start a new chat"), "{err}");
     }
 
-    #[test]
-    fn budget_check_rejects_overflow_before_any_decode() {
-        assert!(check_budget(1000, 500, 200, 4096).is_ok());
-        let err = check_budget(3000, 1000, 512, 4096).unwrap_err();
-        assert!(matches!(err, LlamaError::ContextOverflow(_)));
-        assert!(err.to_string().contains("4096 tokens each photo gets"));
+    /// A prompt of `text` text tokens (`fixed` of them pinned) and `image`
+    /// image tokens.
+    fn prompt(fixed: i32, text: i32, image: i32) -> PromptSize {
+        PromptSize { fixed, text, image }
     }
 
     #[test]
-    fn budget_check_is_exact_at_the_boundary() {
-        assert!(check_budget(2000, 1000, 1096, 4096).is_ok());
-        assert!(check_budget(2000, 1000, 1097, 4096).is_err());
+    fn max_tokens_that_fit_are_left_alone() {
+        assert_eq!(
+            fit_output_budget(prompt(1000, 1200, 300), 2048, 8192).unwrap(),
+            2048
+        );
+    }
+
+    /// Issue #490: a 4635-token prompt and Max Tokens 6144 in an 8192 window
+    /// failed every photo before the model was asked, though an answer needs
+    /// a few hundred tokens. Now the answer gets the rest of the window.
+    #[test]
+    fn max_tokens_that_do_not_fit_are_clamped_to_the_rest_of_the_window() {
+        let budget = fit_output_budget(prompt(900, 1000, 3635), 6144, 8192).unwrap();
+        assert_eq!(budget, 8192 - 4635 - OUTPUT_SAFETY_MARGIN);
+    }
+
+    #[test]
+    fn the_clamp_is_exact_at_the_boundary() {
+        let fits = 4096 - 3000 - i32::try_from(OUTPUT_SAFETY_MARGIN).unwrap();
+        let fits = u32::try_from(fits).unwrap();
+        assert_eq!(
+            fit_output_budget(prompt(0, 3000, 0), fits, 4096).unwrap(),
+            fits
+        );
+        assert_eq!(
+            fit_output_budget(prompt(0, 3000, 0), fits + 1, 4096).unwrap(),
+            fits
+        );
+    }
+
+    #[test]
+    fn a_prompt_that_leaves_too_little_room_is_refused_before_any_decode() {
+        let left = MIN_OUTPUT_TOKENS - 1;
+        let total = 8192 - i32::try_from(OUTPUT_SAFETY_MARGIN + left).unwrap();
+        let err = fit_output_budget(prompt(0, total, 0), 2048, 8192).unwrap_err();
+        assert!(matches!(err, LlamaError::ContextOverflow(_)));
+        assert!(
+            err.to_string().contains("8192 tokens each photo gets"),
+            "{err}"
+        );
+        // One more token of room and it runs, clamped.
+        let total = total - 1;
+        assert_eq!(
+            fit_output_budget(prompt(0, total, 0), 2048, 8192).unwrap(),
+            MIN_OUTPUT_TOKENS
+        );
+    }
+
+    /// A Max Tokens the user set below the minimum is theirs to set; only the
+    /// clamp is held to it.
+    #[test]
+    fn a_small_max_tokens_is_not_raised() {
+        assert_eq!(
+            fit_output_budget(prompt(0, 1000, 0), 100, 4096).unwrap(),
+            100
+        );
+    }
+
+    /// Qwen2.5-VL spends thousands of tokens on a photo that costs Gemma a few
+    /// hundred: that is the image, and the keyword taxonomy is not the lever.
+    #[test]
+    fn an_overflow_names_the_image_when_the_image_fills_the_window() {
+        let err = fit_output_budget(prompt(600, 800, 7300), 2048, 8192)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("The photo itself takes 7300"), "{err}");
+        assert!(err.contains("export size"), "{err}");
+        assert!(!err.contains("taxonomy"), "{err}");
+    }
+
+    #[test]
+    fn an_overflow_names_the_taxonomy_when_the_text_fills_the_window() {
+        let err = fit_output_budget(prompt(7000, 7700, 300), 2048, 8192)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("The text takes 7700 (7000 of them"), "{err}");
+        assert!(err.contains("keyword taxonomy"), "{err}");
     }
 
     /// The bug behind #316: the KV cache is split per sequence, so budgeting
@@ -1568,12 +1768,18 @@ mod tests {
     }
 
     #[test]
-    fn a_budget_that_fits_the_whole_cache_can_still_overflow_one_sequence() {
+    fn a_budget_that_fits_the_whole_cache_is_still_clamped_to_one_sequence() {
         // 8192 total, two photos at once: 4096 each. A 2000-token prompt asking
         // for 4096 output fits the cache and not the sequence.
         let per_seq = i32::try_from(ctx_per_seq(8192, 2)).unwrap();
-        assert!(check_budget(1500, 500, 4096, 8192).is_ok());
-        assert!(check_budget(1500, 500, 4096, per_seq).is_err());
+        assert_eq!(
+            fit_output_budget(prompt(1500, 2000, 0), 4096, 8192).unwrap(),
+            4096
+        );
+        assert_eq!(
+            fit_output_budget(prompt(1500, 2000, 0), 4096, per_seq).unwrap(),
+            4096 - 2000 - OUTPUT_SAFETY_MARGIN
+        );
     }
 
     #[test]
