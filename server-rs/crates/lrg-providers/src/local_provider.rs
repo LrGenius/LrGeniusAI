@@ -110,36 +110,11 @@ impl LocalProvider {
         request: &MetadataGenerationRequest,
         output: &LocalResponse,
     ) -> MetadataGenerationResponse {
-        let text = output.text.as_str();
         let prompt_tokens = output.prompt_tokens;
         let completion_tokens = output.completion_tokens;
-        if output.finish == FinishReason::Repetition {
-            // Checked before parsing: the engine stopped the answer partway,
-            // so it is never complete JSON, and "raise Max Tokens" — the hint
-            // a parse error gives — would only make the next loop longer.
-            return fail(
-                &request.uuid,
-                format!(
-                    "the local model started repeating itself and was stopped after \
-                     {completion_tokens} tokens, so its answer is incomplete. Raising Max Tokens \
-                     will not help. Try this photo with another model, or with a slightly higher \
-                     Temperature."
-                ),
-            );
-        }
-        let parsed: Value = match serde_json::from_str(text.trim()) {
-            Ok(v) => v,
-            Err(e) => {
-                return fail(
-                    &request.uuid,
-                    format!(
-                        "the local model returned a response that could not be parsed as JSON \
-                         (length={} chars). This usually means it hit the token limit — try \
-                         raising Max Tokens in the plugin. ({e})",
-                        text.len()
-                    ),
-                )
-            }
+        let parsed = match parse_answer(&request.uuid, output) {
+            Ok(parsed) => parsed,
+            Err(message) => return fail_after(&request.uuid, message, output),
         };
 
         let keywords = normalize_keywords(
@@ -299,18 +274,14 @@ impl LlmProvider for LocalProvider {
             }
         };
 
-        let parsed: Value = match serde_json::from_str(output.text.trim()) {
-            Ok(v) => v,
-            Err(e) => {
-                return fail_edit(
-                    &request.uuid,
-                    format!(
-                        "the local model returned a response that could not be parsed as JSON \
-                         (length={} chars). This usually means it hit the token limit — try \
-                         raising Max Tokens in the plugin. ({e})",
-                        output.text.len()
-                    ),
-                )
+        let parsed = match parse_answer(&request.uuid, &output) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                return EditGenerationResponse {
+                    input_tokens: output.prompt_tokens,
+                    output_tokens: output.completion_tokens,
+                    ..fail_edit(&request.uuid, message)
+                }
             }
         };
 
@@ -358,6 +329,97 @@ impl LlmProvider for LocalProvider {
 
     async fn list_available_models(&self) -> Vec<String> {
         vec![self.engine.model_name()]
+    }
+}
+
+/// The model's answer as JSON, or what to tell the user about it.
+///
+/// Why the answer ended decides the advice (issue #490): every parse error used
+/// to say "raise Max Tokens", which helps an answer that ran out of room and
+/// only lengthens one that was looping. At debug level the start and end of
+/// the raw answer are logged, so the next report can be read straight off the
+/// log; never at info, where a few thousand photos would flood it.
+fn parse_answer(uuid: &str, output: &LocalResponse) -> Result<Value, String> {
+    let tokens = output.completion_tokens;
+    if output.finish == FinishReason::Repetition {
+        // Checked before parsing: the engine stopped the answer partway, so it
+        // is never complete JSON.
+        log_raw_answer(uuid, output, "stopped while repeating itself");
+        return Err(format!(
+            "the local model started repeating itself and was stopped after {tokens} tokens, so \
+             its answer is incomplete. Raising Max Tokens will not help. Try this photo with \
+             another model, or with a slightly higher Temperature."
+        ));
+    }
+    let error = match serde_json::from_str(output.text.trim()) {
+        Ok(parsed) => return Ok(parsed),
+        Err(error) => error,
+    };
+    log_raw_answer(uuid, output, "not valid JSON");
+    let prompt = output.prompt_tokens;
+    Err(match output.finish {
+        FinishReason::Length => format!(
+            "the local model's answer was cut off after {tokens} tokens, before its JSON was \
+             complete: that was all the room it had (Max Tokens, or what the context window left \
+             beside the {prompt}-token prompt). Raise Max Tokens, or Context size in Plug-in \
+             Manager. ({error})"
+        ),
+        FinishReason::ContextFull => format!(
+            "the local model's answer filled the context window after {tokens} tokens, before its \
+             JSON was complete. Raise Context size in Plug-in Manager, or set Photos in parallel \
+             to 1. ({error})"
+        ),
+        FinishReason::Stop => format!(
+            "the local model ended its answer after {tokens} tokens with text that is not valid \
+             JSON. Raising Max Tokens will not help; try this photo with another model. ({error})"
+        ),
+        FinishReason::Unknown | FinishReason::Repetition => format!(
+            "the local model returned an answer that could not be parsed as JSON ({} characters, \
+             {tokens} tokens). If it ran into Max Tokens, raising it helps; if it was repeating \
+             itself, it does not — try another model. ({error})",
+            output.text.len()
+        ),
+    })
+}
+
+/// How many characters of a failed answer's start and end the debug log shows.
+const RAW_ANSWER_EXCERPT_CHARS: usize = 300;
+
+fn log_raw_answer(uuid: &str, output: &LocalResponse, why: &str) {
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+    let (head, tail) = excerpt(&output.text, RAW_ANSWER_EXCERPT_CHARS);
+    log::debug!(
+        "local model answer for {uuid} is {why} ({:?}, prompt={} completion={} tokens, {} \
+         characters): starts {head:?} … ends {tail:?}",
+        output.finish,
+        output.prompt_tokens,
+        output.completion_tokens,
+        output.text.len(),
+    );
+}
+
+/// The first and last `n` characters of `text`; the whole text and an empty
+/// tail when it is no longer than `2 * n`. Counts characters, never bytes, so
+/// a cut never lands inside one.
+fn excerpt(text: &str, n: usize) -> (String, String) {
+    let count = text.chars().count();
+    if count <= 2 * n {
+        return (text.to_string(), String::new());
+    }
+    let head = text.chars().take(n).collect();
+    let tail = text.chars().skip(count - n).collect();
+    (head, tail)
+}
+
+/// A failed photo that still reports the tokens it cost, so the run's token
+/// line counts what failures spent instead of `in=0 out=0`.
+fn fail_after(uuid: &str, error: String, output: &LocalResponse) -> MetadataGenerationResponse {
+    MetadataGenerationResponse {
+        input_tokens: output.prompt_tokens,
+        output_tokens: output.completion_tokens,
+        ..fail(uuid, error)
     }
 }
 
@@ -512,14 +574,68 @@ mod tests {
         assert_eq!(engine.seen.lock().unwrap().len(), 2);
     }
 
-    #[tokio::test]
-    async fn unparseable_output_reports_a_token_limit_hint() {
-        let engine = FakeEngine::new(vec![FakeEngine::text("{\"caption\": \"truncat")]);
-        let provider = LocalProvider::llamacpp(engine);
-        let response = provider.generate_metadata(&request("p1")).await;
+    fn cut_off(finish: FinishReason) -> Result<LocalResponse, String> {
+        Ok(LocalResponse {
+            text: "{\"caption\": \"truncat".to_string(),
+            prompt_tokens: 4635,
+            completion_tokens: 3549,
+            prefix_reused: true,
+            finish,
+        })
+    }
 
+    async fn error_for(finish: FinishReason) -> MetadataGenerationResponse {
+        let engine = FakeEngine::new(vec![cut_off(finish)]);
+        LocalProvider::llamacpp(engine)
+            .generate_metadata(&request("p1"))
+            .await
+    }
+
+    /// Each way an answer can end gets its own advice; only running out of
+    /// room is helped by more Max Tokens.
+    #[tokio::test]
+    async fn an_unparseable_answer_says_why_it_ended() {
+        let length = error_for(FinishReason::Length).await.error.unwrap();
+        assert!(length.contains("cut off after 3549 tokens"), "{length}");
+        assert!(length.contains("Raise Max Tokens"), "{length}");
+
+        let full = error_for(FinishReason::ContextFull).await.error.unwrap();
+        assert!(full.contains("filled the context window"), "{full}");
+        assert!(full.contains("Context size"), "{full}");
+
+        let stop = error_for(FinishReason::Stop).await.error.unwrap();
+        assert!(stop.contains("not valid JSON"), "{stop}");
+        assert!(stop.contains("will not help"), "{stop}");
+
+        let looped = error_for(FinishReason::Repetition).await.error.unwrap();
+        assert!(looped.contains("repeating itself"), "{looped}");
+        assert!(!looped.contains("Raise Max Tokens"), "{looped}");
+
+        // MLX does not say why it stopped, so both causes are named.
+        let unknown = error_for(FinishReason::Unknown).await.error.unwrap();
+        assert!(unknown.contains("Max Tokens"), "{unknown}");
+        assert!(unknown.contains("repeating"), "{unknown}");
+    }
+
+    /// The run's token line read `in=0 out=0` for every failed photo, hiding
+    /// that a loop had spent thousands of tokens on it.
+    #[tokio::test]
+    async fn a_failed_answer_still_reports_its_tokens() {
+        let response = error_for(FinishReason::Length).await;
         assert!(!response.success);
-        assert!(response.error.unwrap().contains("Max Tokens"));
+        assert_eq!(
+            (response.input_tokens, response.output_tokens),
+            (4635, 3549)
+        );
+    }
+
+    #[test]
+    fn the_debug_excerpt_keeps_both_ends_and_whole_characters() {
+        assert_eq!(excerpt("short", 300), ("short".to_string(), String::new()));
+        let long = format!("{}{}{}", "ä".repeat(5), "x".repeat(20), "ö".repeat(5));
+        let (head, tail) = excerpt(&long, 5);
+        assert_eq!(head, "äääää");
+        assert_eq!(tail, "ööööö");
     }
 
     /// Issue #490: a loop that ran into the token limit was reported as

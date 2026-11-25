@@ -228,6 +228,23 @@ is unaffected.
 
 **Response:** `{status, success_count, failure_count, error_messages, warnings, results}`.
 
+A batch in which **no photo succeeded is still a 200** with `status:
+"processed"`, `success_count: 0`, every photo's `results` entry, and `error`
+summing up the distinct `"<file>: <reason>"` messages (five, then "and N
+more"). Those failures belong to photos — a model's unusable answer, a file
+that would not read or decode — not to the server. It used to be a 500, which
+the plugin's JSON transport reduces to a string: a grouped request then lost
+every photo's own result and sent each photo again on its own, only to fail
+the same way (issue #490). Requests that cannot be served at all still get a
+4xx/5xx: a malformed body, or metadata asked for with no model configured.
+
+A local model's unusable answer says why it ended, since that decides what
+helps: *started repeating itself* (stopped early by loop detection — more Max
+Tokens will not help), *cut off after N tokens* (raise Max Tokens or Context
+size), *filled the context window*, or *ended … with text that is not valid
+JSON*. A failed photo still reports the tokens it spent, so the run's
+`LLM tokens over N photo(s), K failed: in=… out=…` log line counts them.
+
 `warnings` is where a *degraded success* is reported: the photo was indexed, but
 an optional signal was lost — most often `"<file> faces: face model is not
 downloaded yet …"` or the same for species. Metadata generation reports here

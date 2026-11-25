@@ -347,6 +347,47 @@ describe("the local model's settings on every request that can load it", functio
 		assert.are.equal("0", chunkValue(sent, "llm_gpu_layers"))
 	end)
 
+	-- The backend answers a batch where every photo failed with 200 and each
+	-- photo's result (it used to be a 500, whose body the transport drops).
+	local function allFailed(errorText)
+		return JSON:encode({
+			status = "processed",
+			success_count = 0,
+			failure_count = 1,
+			error = "a.jpg: " .. errorText,
+			error_messages = { "a.jpg: " .. errorText },
+			results = { { photo_id = "photo-1", success = false, error = errorText } },
+		}),
+			{ status = 200 }
+	end
+
+	it("keeps each photo's own result when every photo of a group failed", function()
+		_G.LrHttp = {
+			post = function()
+				return allFailed("the local model started repeating itself")
+			end,
+		}
+		local ok, response = SearchIndexAPI.analyzeAndIndexPhotosByReference(
+			{ { photoId = "photo-1", filePath = "/photos/a.jpg", options = {} } },
+			{ tasks = { "metadata" }, provider = "llamacpp" }
+		)
+		assert.is_false(ok)
+		-- A table, not an error string: the caller reads each photo's outcome
+		-- from it instead of sending every photo again on its own.
+		assert.are.equal("the local model started repeating itself", response.results[1].error)
+	end)
+
+	it("reports a single photo's failure in the backend's words", function()
+		_G.LrHttp = {
+			post = function()
+				return allFailed("the local model started repeating itself")
+			end,
+		}
+		local ok, err = SearchIndexAPI.analyzeAndIndexPhotoByReference("photo-1", "/photos/a.jpg", {})
+		assert.is_false(ok)
+		assert.are.equal("a.jpg: the local model started repeating itself", err)
+	end)
+
 	it("sends them with a photo uploaded for an AI edit", function()
 		local sent
 		_G.LrHttp = {

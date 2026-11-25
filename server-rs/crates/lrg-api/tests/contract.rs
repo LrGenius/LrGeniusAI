@@ -5462,3 +5462,84 @@ async fn cull_names_a_real_blink_from_the_face_state() {
         .iter()
         .any(|c| c == "eyes_closed" || c == "possible_blink"));
 }
+
+// ---------------------------------------------------------------------------
+// A batch in which every photo failed is a processed batch with per-photo
+// results, not a server error (issue #490). As a 500 the plugin's transport
+// dropped the body, so a grouped request lost each photo's own result and
+// sent every photo again on its own.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_batch_where_every_photo_failed_still_reports_each_photo() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+
+    let body = serde_json::json!({
+        "images": [
+            {"path": "/nonexistent/one.jpg", "photo_id": "one"},
+            {"path": "/nonexistent/two.jpg", "photo_id": "two"},
+        ],
+        "tasks": ["cull"],
+        "db_path": db_path,
+    });
+    let response = app
+        .oneshot(
+            Request::post("/v1/index/photos/by-path")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "processed", "{json}");
+    assert_eq!(json["success_count"], 0, "{json}");
+    assert_eq!(json["failure_count"], 2, "{json}");
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "{json}");
+    assert!(results.iter().all(|r| r["success"] == false), "{json}");
+    assert_eq!(results[1]["photo_id"], "two", "{json}");
+    // The single-photo callers show `error`: it names the photo.
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(error.contains("one.jpg"), "{json}");
+}
+
+/// The case of issue #490: the photo reads fine and the model's answer is what
+/// fails. Every photo failing that way is still a processed batch.
+#[tokio::test]
+async fn a_batch_whose_model_failed_every_photo_still_reports_each_photo() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let photo = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/astronaut.jpg");
+
+    let body = serde_json::json!({
+        "images": [{"path": photo, "photo_id": "astro"}],
+        "tasks": ["metadata"],
+        "provider": "llamacpp",
+        "model": "no-such-model.gguf",
+        "db_path": db_path,
+    });
+    let response = app
+        .oneshot(
+            Request::post("/v1/index/photos/by-path")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "processed", "{json}");
+    assert_eq!(json["success_count"], 0, "{json}");
+    assert_eq!(json["results"][0]["photo_id"], "astro", "{json}");
+    assert_eq!(json["results"][0]["success"], false, "{json}");
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(error.starts_with("astronaut.jpg: "), "{json}");
+}

@@ -933,21 +933,22 @@ pub(crate) async fn process_batch(
     }
 
     if normalized_photos.is_empty() {
+        // Every photo failed to read or decode. Those are the photos' own
+        // failures, answered like any batch where none succeeded (see the end
+        // of this function): with each photo's result, which a grouped caller
+        // needs to send exactly those photos through its export fallback.
+        let mut body = json!({
+            "status": "processed",
+            "success_count": 0,
+            "failure_count": conversion_errors.len(),
+            "error_messages": &conversion_errors,
+            "warnings": [],
+            "results": results,
+        });
         if !conversion_errors.is_empty() {
-            let joined = conversion_errors
-                .iter()
-                .take(5)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" | ");
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": joined})),
-            )
-                .into_response();
+            body["error"] = json!(all_failed_summary(&conversion_errors));
         }
-        return Json(json!({"status": "processed", "success_count": 0, "failure_count": 0}))
-            .into_response();
+        return Json(body).into_response();
     }
 
     // Matches process_image_task's early, whole-batch failure: metadata
@@ -1147,6 +1148,9 @@ pub(crate) async fn process_batch(
         // ones: each costs a full pass over the model weights, so the
         // out-tokens-per-second figure is what says whether decode dominates.
         let mut llm_photos: u64 = 0;
+        // Failed answers count in the totals too (a looping model spends
+        // thousands of tokens on a photo it then fails); this says how many.
+        let mut llm_failed: u64 = 0;
         let mut total_in: u64 = 0;
         let mut total_out: u64 = 0;
         let mut total_llm_secs: f64 = 0.0;
@@ -1174,12 +1178,16 @@ pub(crate) async fn process_batch(
                     );
                     for (&i, response) in group.iter().zip(responses) {
                         log::debug!(
-                            "Photo {}: LLM tokens in={} out={}",
+                            "Photo {}: LLM tokens in={} out={}{}",
                             prepared[i].photo_id,
                             response.input_tokens,
-                            response.output_tokens
+                            response.output_tokens,
+                            if response.success { "" } else { " (failed)" }
                         );
                         llm_photos += 1;
+                        if !response.success {
+                            llm_failed += 1;
+                        }
                         total_in += u64::from(response.input_tokens);
                         total_out += u64::from(response.output_tokens);
                         llm_responses[i] = Some(response);
@@ -1203,8 +1211,9 @@ pub(crate) async fn process_batch(
         if llm_photos > 0 {
             let photos = llm_photos as f64;
             log::info!(
-                "LLM tokens over {llm_photos} photo(s): in={total_in} out={total_out} \
-                 (mean per photo: in={:.0} out={:.0}); {:.1}s total, {:.1} output tok/s",
+                "LLM tokens over {llm_photos} photo(s), {llm_failed} failed: in={total_in} \
+                 out={total_out} (mean per photo: in={:.0} out={:.0}); {:.1}s total, {:.1} output \
+                 tok/s",
                 total_in as f64 / photos,
                 total_out as f64 / photos,
                 total_llm_secs,
@@ -1256,43 +1265,53 @@ pub(crate) async fn process_batch(
 
     log::info!("Batch processing complete. Success: {success_count}, Failures: {failure_count}.");
 
-    if success_count == 0 {
-        let mut unique = Vec::new();
-        for e in &error_messages {
-            if !unique.contains(e) {
-                unique.push(e.clone());
-            }
-        }
-        let mut msg = "No images were successfully processed".to_string();
-        if !unique.is_empty() {
-            msg.push_str(": ");
-            msg.push_str(
-                &unique
-                    .iter()
-                    .take(5)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" | "),
-            );
-        }
-        // `results` rides along even on the all-failed path: a grouped caller
-        // still needs to know which photo hit which error.
-        return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": msg, "results": results, "warnings": warnings})),
-        )
-            .into_response();
-    }
-
-    Json(json!({
+    // A batch in which no photo succeeded is still a processed batch, not a
+    // server error: every failure here belongs to a photo (a model's unusable
+    // answer, a file that would not decode) and is reported against it in
+    // `results`. It used to be a 500, which the plugin's JSON transport turns
+    // into a bare string — so a grouped request lost every photo's own result
+    // and sent each photo again on its own, repeating the same failure, and
+    // the dialog read "API request failed. HTTP status: 500" for a photo the
+    // model could not describe (issue #490). `error` is set only here, where
+    // the single-photo callers read it.
+    let mut body = json!({
         "status": "processed",
         "success_count": success_count,
         "failure_count": failure_count,
         "error_messages": error_messages,
         "warnings": warnings,
         "results": results,
-    }))
-    .into_response()
+    });
+    if success_count == 0 {
+        body["error"] = json!(all_failed_summary(&error_messages));
+    }
+    Json(body).into_response()
+}
+
+/// What a batch in which no photo succeeded says in `error`: its distinct
+/// per-photo messages (`"<file>: <reason>"`), a handful of them, and how many
+/// more there were.
+fn all_failed_summary(error_messages: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut unique: Vec<&str> = Vec::new();
+    for message in error_messages {
+        if !unique.contains(&message.as_str()) {
+            unique.push(message);
+        }
+    }
+    if unique.is_empty() {
+        return "No images were successfully processed.".to_string();
+    }
+    let mut summary = unique
+        .iter()
+        .take(SHOWN)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if unique.len() > SHOWN {
+        summary.push_str(&format!(" | and {} more", unique.len() - SHOWN));
+    }
+    summary
 }
 
 /// One photo's state in flight between the two phases of [`process_batch`].
@@ -3476,6 +3495,31 @@ fn build_metadata_request(
         catalog_keywords: mo.catalog_keywords.clone(),
         ollama_base_url: mo.ollama_base_url.clone(),
         lmstudio_base_url: mo.lmstudio_base_url.clone(),
+    }
+}
+
+#[cfg(test)]
+mod all_failed_tests {
+    use super::all_failed_summary;
+
+    #[test]
+    fn a_single_failure_is_reported_as_it_stands() {
+        let messages = vec!["a.jpg: the local model started repeating itself".to_string()];
+        assert_eq!(all_failed_summary(&messages), messages[0]);
+    }
+
+    #[test]
+    fn repeated_causes_are_named_once_and_the_rest_counted() {
+        let mut messages: Vec<String> = (0..8).map(|i| format!("{i}.jpg: bad")).collect();
+        messages.push("0.jpg: bad".to_string());
+        let summary = all_failed_summary(&messages);
+        assert!(summary.starts_with("0.jpg: bad | 1.jpg: bad"), "{summary}");
+        assert!(summary.ends_with("| and 3 more"), "{summary}");
+    }
+
+    #[test]
+    fn nothing_to_report_still_says_something() {
+        assert!(!all_failed_summary(&[]).is_empty());
     }
 }
 
