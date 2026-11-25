@@ -157,7 +157,7 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `model` | string | Model name within the provider (for `llamacpp` the GGUF file name, for `mlx` the model directory name) |
 | `api_key` | string | Key for `chatgpt`/`gemini`/`anthropic` (required) or `openai_compatible` (optional) |
 | `server_url` | string | `openai_compatible` only: the server address, normalised as for `/v1/llm/providers/models` |
-| `llm_n_ctx` | int | `llamacpp` only: context window override (0/absent = default) |
+| `llm_n_ctx` | int | `llamacpp` only: context window override (0/absent = `LRG_LLAMA_N_CTX`, else 8192). The plug-in sends all three engine fields with every request that may load the model (`SearchIndexAPI.localEngineFields`): a route that leaves them out runs on the default, and the model reloads each time it alternates with one that does not (issue #490) |
 | `llm_n_parallel` | int | `llamacpp` only: photos decoded concurrently |
 | `llm_gpu_layers` | int | `llamacpp` only: layers offloaded to the GPU (`0` = CPU only) |
 | `temperature` | float | Sampling temperature, default `0.1`. Only the local providers (`llamacpp`, `ollama`, `lmstudio`, `openai_compatible`) use it: OpenAI reasoning models get a fixed `1.0`, Anthropic and Gemini 3 are sent none, and MLX's guided generation samples on its own settings |

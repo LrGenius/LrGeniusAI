@@ -164,6 +164,42 @@ function SearchIndexAPI.wantsFaceNames(options)
 	return not (prefs ~= nil and prefs.submitFaceNames == false)
 end
 
+---
+-- The in-process model's tuning from Plug-in Manager (context size, photos in
+-- parallel, layers on the GPU) as request fields, for every request that may
+-- load that model. Remote providers ignore them.
+--
+-- The server loads the model with what the request names and falls back to its
+-- own defaults for what it does not. The upload route (`/v1/index/photos`,
+-- what every exported JPEG goes through) never sent them, so indexing ran on
+-- an 8192-token context whatever was set here — and a run that mixed it with
+-- `/v1/index/photos/by-path` reloaded the model each time the two alternated
+-- (issue #490). Every caller takes them from here so no route can drift again.
+--
+-- @return table { llm_n_ctx, llm_n_parallel, llm_gpu_layers }, each a string
+--   or nil when unset.
+function SearchIndexAPI.localEngineFields()
+	local function field(value)
+		return value ~= nil and tostring(value) or nil
+	end
+	return {
+		llm_n_ctx = field(prefs and prefs.llmContextSize),
+		llm_n_parallel = field(prefs and prefs.llmParallel),
+		llm_gpu_layers = field(prefs and prefs.llmGpuLayers),
+	}
+end
+
+-- The same fields as multipart parts.
+local function appendLocalEngineChunks(mimeChunks)
+	-- In a fixed order: `pairs` would send them differently each time.
+	local fields = SearchIndexAPI.localEngineFields()
+	for _, name in ipairs({ "llm_n_ctx", "llm_n_parallel", "llm_gpu_layers" }) do
+		if fields[name] ~= nil then
+			table.insert(mimeChunks, { name = name, value = fields[name] })
+		end
+	end
+end
+
 -- Backend paths, grouped by domain. Everything lives under `/v1` except the
 -- five-path bootstrap contract below, which is deliberately unversioned: a
 -- plug-in that updates ahead of its backend still has to reach `/ping`,
@@ -1024,6 +1060,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 
 	options = options or {}
 	local url = SearchIndexAPI.url("INDEX_BY_REFERENCE")
+	local engine = SearchIndexAPI.localEngineFields()
 
 	local body = {
 		images = {
@@ -1090,9 +1127,9 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		-- Local-engine tuning. Ignored by every remote provider; changing one
 		-- makes the server reload the local model, so these are settings the
 		-- user adjusts in Plug-in Manager, not per photo.
-		llm_n_ctx = prefs and prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
-		llm_n_parallel = prefs and prefs.llmParallel and tostring(prefs.llmParallel) or nil,
-		llm_gpu_layers = prefs and prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
+		llm_n_ctx = engine.llm_n_ctx,
+		llm_n_parallel = engine.llm_n_parallel,
+		llm_gpu_layers = engine.llm_gpu_layers,
 	}
 
 	log:trace("Analyzing and indexing photo (by reference): " .. tostring(filePath) .. " id " .. photoId)
@@ -1184,6 +1221,7 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 	-- Everything not per-photo comes from the first entry: those fields are
 	-- run-constant, which is exactly why the server can pin them in its cache.
 	local base = entries[1].options or options
+	local engine = SearchIndexAPI.localEngineFields()
 	local body = {
 		images = images,
 		catalog_id = getCatalogId(),
@@ -1228,9 +1266,9 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		-- Local-engine tuning. Ignored by every remote provider; changing one
 		-- makes the server reload the local model, so these are settings the
 		-- user adjusts in Plug-in Manager, not per photo.
-		llm_n_ctx = prefs and prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
-		llm_n_parallel = prefs and prefs.llmParallel and tostring(prefs.llmParallel) or nil,
-		llm_gpu_layers = prefs and prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
+		llm_n_ctx = engine.llm_n_ctx,
+		llm_n_parallel = engine.llm_n_parallel,
+		llm_gpu_layers = engine.llm_gpu_layers,
 	}
 
 	log:trace("Analyzing and indexing " .. tostring(#images) .. " photos (grouped by reference)")
@@ -1541,6 +1579,7 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	if options.server_url then
 		table.insert(mimeChunks, { name = "server_url", value = options.server_url })
 	end
+	appendLocalEngineChunks(mimeChunks)
 
 	table.insert(mimeChunks, {
 		name = "image",
@@ -1669,6 +1708,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 
 	-- Regeneration control: if false, server will only fill missing fields
 	table.insert(mimeChunks, { name = "regenerate_metadata", value = tostring(options.regenerate_metadata ~= false) })
+	appendLocalEngineChunks(mimeChunks)
 
 	-- Add file. Originals may be RAW/HEIC/etc. — the backend converts them
 	-- based on the file name, so only the content type header varies here.

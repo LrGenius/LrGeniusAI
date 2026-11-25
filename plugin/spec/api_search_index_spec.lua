@@ -262,3 +262,100 @@ describe("SearchIndexAPI.wantsFaceNames", function()
 		assert.is_true(SearchIndexAPI.wantsFaceNames(nil))
 	end)
 end)
+
+-- Issue #490: the context size set in Plug-in Manager never reached the local
+-- model, because the upload route — the one every exported JPEG goes through —
+-- did not send it, and the server fell back to its 8192-token default.
+describe("the local model's settings on every request that can load it", function()
+	local saved
+
+	local function chunkValue(chunks, name)
+		for _, chunk in ipairs(chunks or {}) do
+			if chunk.name == name then
+				return chunk.value
+			end
+		end
+	end
+
+	before_each(function()
+		saved = {}
+		for _, name in ipairs({ "LrHttp", "LrPathUtils", "JSON", "prefs" }) do
+			saved[name] = { value = _G[name] }
+		end
+		require("Defaults")
+		_G.JSON = require("JSON")
+		saved.getCatalogIdentifier = Util.getCatalogIdentifier
+		-- No catalog: the request then goes out without waiting for the
+		-- catalog's migrations, which is all this test needs.
+		Util.getCatalogIdentifier = function()
+			return nil, "no catalog in a unit test"
+		end
+		_G.LrPathUtils = {
+			leafName = function(path)
+				return (path:match("[^/]+$"))
+			end,
+			extension = function(name)
+				return (name:match("%.([^.]+)$"))
+			end,
+			child = function(parent, leaf)
+				return parent .. "/" .. leaf
+			end,
+		}
+		-- A backend on another computer: no db_path to add, no token file.
+		_G.prefs = {
+			backendServerUrl = "http://nas.local:19819",
+			llmContextSize = 16384,
+			llmParallel = 2,
+			llmGpuLayers = 0,
+		}
+	end)
+
+	after_each(function()
+		for name, original in pairs(saved) do
+			if name ~= "getCatalogIdentifier" then
+				_G[name] = original.value
+			end
+		end
+		Util.getCatalogIdentifier = saved.getCatalogIdentifier
+	end)
+
+	it("reads them from the preferences, as text", function()
+		assert.are.same(
+			{ llm_n_ctx = "16384", llm_n_parallel = "2", llm_gpu_layers = "0" },
+			SearchIndexAPI.localEngineFields()
+		)
+	end)
+
+	it("leaves out what was never set, so the server's default applies", function()
+		_G.prefs = {}
+		assert.are.same({}, SearchIndexAPI.localEngineFields())
+	end)
+
+	it("sends them with a photo uploaded for indexing", function()
+		local sent
+		_G.LrHttp = {
+			postMultipart = function(_, chunks)
+				sent = chunks
+				return '{"status":"processed","success_count":1}', { status = 200 }
+			end,
+		}
+		local ok = SearchIndexAPI.analyzeAndIndexPhoto("photo-1", "/tmp/export/a.jpg", { provider = "llamacpp" })
+		assert.is_true(ok)
+		assert.are.equal("16384", chunkValue(sent, "llm_n_ctx"))
+		assert.are.equal("2", chunkValue(sent, "llm_n_parallel"))
+		-- Zero is a real choice (CPU only), not "unset".
+		assert.are.equal("0", chunkValue(sent, "llm_gpu_layers"))
+	end)
+
+	it("sends them with a photo uploaded for an AI edit", function()
+		local sent
+		_G.LrHttp = {
+			postMultipart = function(_, chunks)
+				sent = chunks
+				return '{"status":"success"}', { status = 200 }
+			end,
+		}
+		SearchIndexAPI.generateEditRecipePhoto("photo-1", "/tmp/export/a.jpg", { provider = "llamacpp" })
+		assert.are.equal("16384", chunkValue(sent, "llm_n_ctx"))
+	end)
+end)

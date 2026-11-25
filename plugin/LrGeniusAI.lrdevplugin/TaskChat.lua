@@ -115,15 +115,16 @@ LrTasks.startAsyncTask(function()
 		end
 
 		local fields = Secrets.connectionFields(prefs)
+		local engine = SearchIndexAPI.localEngineFields()
 		local body = {
 			provider = provider,
 			model = model,
 			-- The same engine settings indexing uses, so opening the chat does
 			-- not make the backend reload the model with other ones. Sent for
 			-- a cloud model too: the page can switch to a local one.
-			llm_n_ctx = prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
-			llm_n_parallel = prefs.llmParallel and tostring(prefs.llmParallel) or nil,
-			llm_gpu_layers = prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
+			llm_n_ctx = engine.llm_n_ctx,
+			llm_n_parallel = engine.llm_n_parallel,
+			llm_gpu_layers = engine.llm_gpu_layers,
 			-- Every provider the user has set up, so the page's model menu
 			-- offers them all. The backend keeps the keys in memory for this
 			-- chat only and never hands them to the page.

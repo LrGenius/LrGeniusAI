@@ -147,6 +147,35 @@ fn ctx_per_seq(n_ctx: u32, n_seq_max: u32) -> u32 {
     (n_ctx / n_seq_max) & !255
 }
 
+/// Why the context llama.cpp allocated is not the one that was asked for, or
+/// `None` when it is.
+///
+/// Nothing caps the context deliberately: the size the request names is the
+/// size requested. But a mismatch must never be silent (issue #490 was a
+/// context size that never arrived, and the log gave no hint), so whatever the
+/// cause, it is named.
+fn context_size_note(requested: u32, effective: u32, n_ctx_train: u32) -> Option<String> {
+    let mut notes = Vec::new();
+    if effective < requested {
+        notes.push(format!(
+            "requested n_ctx={requested}, effective n_ctx={effective} because llama.cpp \
+             allocated less than was asked for"
+        ));
+    } else if effective > requested {
+        notes.push(format!(
+            "requested n_ctx={requested}, effective n_ctx={effective} because llama.cpp \
+             rounds the context up to its block size"
+        ));
+    }
+    if n_ctx_train > 0 && effective > n_ctx_train {
+        notes.push(format!(
+            "n_ctx={effective} is more than the {n_ctx_train} tokens this model was trained \
+             on; answers may degrade past that point"
+        ));
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
 /// Reduce `n_parallel` until each sequence still gets a usable window.
 ///
 /// This is the behaviour the plugin's settings dialog and the wiki have always
@@ -278,6 +307,9 @@ pub(crate) fn run(
     let tok_env = LlamaSampler::llguidance_tok_env(&model);
 
     // Ask the context, not the config: llama.cpp pads `n_ctx` up.
+    if let Some(note) = context_size_note(config.n_ctx, ctx.n_ctx(), model.n_ctx_train()) {
+        log::warn!("{note}");
+    }
     let n_ctx_seq = ctx_per_seq(ctx.n_ctx(), n_seq_max);
     let info = EngineInfo {
         model_path: config.model_path.display().to_string(),
@@ -1555,6 +1587,20 @@ mod tests {
         // Never below one, however small the context.
         assert_eq!(parallel_that_fits(1024, 4), 1);
         assert_eq!(parallel_that_fits(8192, 0), 1);
+    }
+
+    #[test]
+    fn a_context_other_than_the_requested_one_is_named() {
+        assert_eq!(context_size_note(16384, 16384, 131_072), None);
+        let smaller = context_size_note(16384, 8192, 131_072).unwrap();
+        assert!(
+            smaller.contains("requested n_ctx=16384, effective n_ctx=8192 because"),
+            "{smaller}"
+        );
+        let padded = context_size_note(10000, 10240, 131_072).unwrap();
+        assert!(padded.contains("rounds the context up"), "{padded}");
+        let past_training = context_size_note(65536, 65536, 32768).unwrap();
+        assert!(past_training.contains("trained on"), "{past_training}");
     }
 
     #[test]
