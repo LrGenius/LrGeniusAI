@@ -669,6 +669,19 @@ fn folder_for(root: &Path, repo: &str, installed: impl Fn(&Path) -> bool) -> (St
     (qualified, done)
 }
 
+/// Whether every one of `files` already sits directly in `dir`, under its
+/// file name and at the size the repo lists (when it lists one). A size check
+/// rather than a name check alone: two publishers can name different
+/// quantizations alike, and a size that matches to the byte is the same file
+/// in practice.
+fn present_in(dir: &Path, files: &[RepoFile]) -> bool {
+    !files.is_empty()
+        && files.iter().all(|file| {
+            std::fs::metadata(dir.join(file_name(&file.path)))
+                .is_ok_and(|meta| meta.is_file() && (file.size == 0 || meta.len() == file.size))
+        })
+}
+
 /// Record which repo a model folder holds; see [`folder_for`].
 pub fn write_source_marker(dir: &Path, repo: &str, revision: &str) -> std::io::Result<()> {
     let marker = serde_json::json!({ "repo": repo, "revision": revision });
@@ -856,16 +869,25 @@ pub async fn check_repo(
             let root = lrg_ml::model_paths::resolve_llm().dir;
             let model_name = file_name(&assessed.model.path);
             let mmproj_name = file_name(&assessed.mmproj.path);
-            let (dir_name, already_installed) = folder_for(&root, &repo, |dir| {
-                dir.join(&model_name).is_file() && dir.join(&mmproj_name).is_file()
-            });
+            let files = vec![assessed.model, assessed.mmproj];
+            // A catalog download puts its pair straight into `root`, not into
+            // a folder of its own, so the folder check alone missed it and
+            // the same multi-gigabyte pair was downloaded a second time
+            // (issue #490). The same names with the same sizes are this model.
+            let (dir_name, already_installed) = if present_in(&root, &files) {
+                (String::new(), true)
+            } else {
+                folder_for(&root, &repo, |dir| {
+                    dir.join(&model_name).is_file() && dir.join(&mmproj_name).is_file()
+                })
+            };
             Ok(RepoCheck {
                 engine,
                 repo,
                 revision: sha,
                 dir_name,
                 installed_name: model_name,
-                files: vec![assessed.model, assessed.mmproj],
+                files,
                 approx_bytes: assessed.approx_bytes,
                 est_ram_gb: assessed.est_ram_gb,
                 model_type: None,
@@ -902,6 +924,33 @@ mod tests {
             path: path.to_string(),
             size,
         }
+    }
+
+    /// Issue #490: a pair the catalog had put into the model directory was
+    /// downloaded again through "Other model from Hugging Face…", because
+    /// only the repo's own folder was looked at.
+    #[test]
+    fn a_pair_already_in_the_model_directory_counts_as_installed() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("gemma-4-12B-it-QAT-Q4_0.gguf"), [0u8; 7]).unwrap();
+        std::fs::write(
+            root.path().join("mmproj-gemma-4-12B-it-QAT-BF16.gguf"),
+            [0u8; 3],
+        )
+        .unwrap();
+        let pair = |model_size, mmproj_size| {
+            vec![
+                file("gemma-4-12B-it-QAT-Q4_0.gguf", model_size),
+                file("mmproj-gemma-4-12B-it-QAT-BF16.gguf", mmproj_size),
+            ]
+        };
+        assert!(present_in(root.path(), &pair(7, 3)));
+        // A file of another size is another file.
+        assert!(!present_in(root.path(), &pair(8, 3)));
+        // Half a pair is not the model.
+        std::fs::remove_file(root.path().join("mmproj-gemma-4-12B-it-QAT-BF16.gguf")).unwrap();
+        assert!(!present_in(root.path(), &pair(7, 3)));
+        assert!(!present_in(root.path(), &[]));
     }
 
     fn input(repo: &str, revision: Option<&str>, quant: Option<&str>) -> RepoInput {

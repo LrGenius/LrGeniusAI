@@ -1971,7 +1971,7 @@ Checks a Hugging Face model before anything is downloaded ("Other model from Hug
 }
 ```
 
-For `llamacpp`, `files` is the model file then its projector (`Q4_K_M` and an `f16` projector unless a quantization follows a colon), `quant` is set and `model_type` is null. `installed_name` is the `model` to send once it is downloaded. The Hugging Face address can be overridden with `HF_ENDPOINT`.
+For `llamacpp`, `files` is the model file then its projector (`Q4_K_M` and an `f16` projector unless a quantization follows a colon), `quant` is set and `model_type` is null. `installed_name` is the `model` to send once it is downloaded. A GGUF pair also counts as `already_installed` when both files already sit directly in the llama.cpp model directory, where catalog downloads put them, with the sizes the repo lists; `dir_name` is then empty. Looking only in the repo's own folder had the same multi-gigabyte pair downloaded twice (issue #490). The Hugging Face address can be overridden with `HF_ENDPOINT`.
 
 Only one local model downloads at a time. While one is running, a second request gets **409** with `{ "error": "Another model download is still running. …" }` — it is refused, not queued.
 
