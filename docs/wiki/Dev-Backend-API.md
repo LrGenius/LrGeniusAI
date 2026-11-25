@@ -157,7 +157,7 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `model` | string | Model name within the provider (for `llamacpp` the GGUF file name, for `mlx` the model directory name) |
 | `api_key` | string | Key for `chatgpt`/`gemini`/`anthropic` (required) or `openai_compatible` (optional) |
 | `server_url` | string | `openai_compatible` only: the server address, normalised as for `/v1/llm/providers/models` |
-| `llm_n_ctx` | int | `llamacpp` only: context window override (0/absent = default) |
+| `llm_n_ctx` | int | `llamacpp` only: context window override (0/absent = `LRG_LLAMA_N_CTX`, else 8192). The plug-in sends all three engine fields with every request that may load the model (`SearchIndexAPI.localEngineFields`): a route that leaves them out runs on the default, and the model reloads each time it alternates with one that does not (issue #490) |
 | `llm_n_parallel` | int | `llamacpp` only: photos decoded concurrently |
 | `llm_gpu_layers` | int | `llamacpp` only: layers offloaded to the GPU (`0` = CPU only) |
 | `temperature` | float | Sampling temperature, default `0.1`. Only the local providers (`llamacpp`, `ollama`, `lmstudio`, `openai_compatible`) use it: OpenAI reasoning models get a fixed `1.0`, Anthropic and Gemini 3 are sent none, and MLX's guided generation samples on its own settings |
@@ -227,6 +227,23 @@ in the per-photo half of the split prompt, so the run-constant KV-cache prefix
 is unaffected.
 
 **Response:** `{status, success_count, failure_count, error_messages, warnings, results}`.
+
+A batch in which **no photo succeeded is still a 200** with `status:
+"processed"`, `success_count: 0`, every photo's `results` entry, and `error`
+summing up the distinct `"<file>: <reason>"` messages (five, then "and N
+more"). Those failures belong to photos — a model's unusable answer, a file
+that would not read or decode — not to the server. It used to be a 500, which
+the plugin's JSON transport reduces to a string: a grouped request then lost
+every photo's own result and sent each photo again on its own, only to fail
+the same way (issue #490). Requests that cannot be served at all still get a
+4xx/5xx: a malformed body, or metadata asked for with no model configured.
+
+A local model's unusable answer says why it ended, since that decides what
+helps: *started repeating itself* (stopped early by loop detection — more Max
+Tokens will not help), *cut off after N tokens* (raise Max Tokens or Context
+size), *filled the context window*, or *ended … with text that is not valid
+JSON*. A failed photo still reports the tokens it spent, so the run's
+`LLM tokens over N photo(s), K failed: in=… out=…` log line counts them.
 
 `warnings` is where a *degraded success* is reported: the photo was indexed, but
 an optional signal was lost — most often `"<file> faces: face model is not
@@ -1954,7 +1971,7 @@ Checks a Hugging Face model before anything is downloaded ("Other model from Hug
 }
 ```
 
-For `llamacpp`, `files` is the model file then its projector (`Q4_K_M` and an `f16` projector unless a quantization follows a colon), `quant` is set and `model_type` is null. `installed_name` is the `model` to send once it is downloaded. The Hugging Face address can be overridden with `HF_ENDPOINT`.
+For `llamacpp`, `files` is the model file then its projector (`Q4_K_M` and an `f16` projector unless a quantization follows a colon), `quant` is set and `model_type` is null. `installed_name` is the `model` to send once it is downloaded. A GGUF pair also counts as `already_installed` when both files already sit directly in the llama.cpp model directory, where catalog downloads put them, with the sizes the repo lists; `dir_name` is then empty. Looking only in the repo's own folder had the same multi-gigabyte pair downloaded twice (issue #490). The Hugging Face address can be overridden with `HF_ENDPOINT`.
 
 Only one local model downloads at a time. While one is running, a second request gets **409** with `{ "error": "Another model download is still running. …" }` — it is refused, not queued.
 

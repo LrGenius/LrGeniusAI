@@ -56,8 +56,11 @@ use tokio::sync::oneshot;
 
 use crate::device;
 use crate::engine::{
-    ChatMessage, ChatRequest, EngineInfo, GenerationOutput, GenerationRequest, LlamaEngineConfig,
+    ChatMessage, ChatRequest, EngineInfo, FinishReason, GenerationOutput, GenerationRequest,
+    LlamaEngineConfig,
 };
+use crate::prompt_format::{self, render_gemma4, PromptFormat, Turn};
+use crate::repetition::RepetitionGuard;
 use crate::LlamaError;
 
 pub(crate) enum Job {
@@ -79,6 +82,17 @@ const PREFIX_SEQ: i32 = 0;
 /// fit a realistic prompt plus its answer, so `n_parallel` is reduced instead —
 /// slower, but it produces results rather than `NoKvCacheSlot`.
 const MIN_CTX_PER_SEQ: u32 = 4096;
+
+/// The smallest answer a photo is given room for. Max Tokens is clamped down
+/// to what is left of the photo's window after its prompt, but below this a
+/// keyword list and a caption are cut off mid-JSON, so the photo is refused
+/// before any decode instead. A successful answer runs to roughly 45–350
+/// tokens.
+const MIN_OUTPUT_TOKENS: u32 = 256;
+
+/// Positions kept free past the answer when Max Tokens is clamped, so the
+/// clamped budget never runs the sequence right up to the end of its window.
+const OUTPUT_SAFETY_MARGIN: u32 = 8;
 
 struct PinnedPrefix {
     hash: u64,
@@ -145,6 +159,35 @@ fn ctx_per_seq(n_ctx: u32, n_seq_max: u32) -> u32 {
         return n_ctx;
     }
     (n_ctx / n_seq_max) & !255
+}
+
+/// Why the context llama.cpp allocated is not the one that was asked for, or
+/// `None` when it is.
+///
+/// Nothing caps the context deliberately: the size the request names is the
+/// size requested. But a mismatch must never be silent (issue #490 was a
+/// context size that never arrived, and the log gave no hint), so whatever the
+/// cause, it is named.
+fn context_size_note(requested: u32, effective: u32, n_ctx_train: u32) -> Option<String> {
+    let mut notes = Vec::new();
+    if effective < requested {
+        notes.push(format!(
+            "requested n_ctx={requested}, effective n_ctx={effective} because llama.cpp \
+             allocated less than was asked for"
+        ));
+    } else if effective > requested {
+        notes.push(format!(
+            "requested n_ctx={requested}, effective n_ctx={effective} because llama.cpp \
+             rounds the context up to its block size"
+        ));
+    }
+    if n_ctx_train > 0 && effective > n_ctx_train {
+        notes.push(format!(
+            "n_ctx={effective} is more than the {n_ctx_train} tokens this model was trained \
+             on; answers may degrade past that point"
+        ));
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
 }
 
 /// Reduce `n_parallel` until each sequence still gets a usable window.
@@ -264,8 +307,8 @@ pub(crate) fn run(
     };
 
     let supports_vision = mtmd.as_ref().is_some_and(MtmdContext::support_vision);
-    let chat_template = resolve_chat_template(&model);
-    if chat_template.is_none() {
+    let prompt_format = prompt_format::resolve(&model);
+    if matches!(prompt_format, PromptFormat::Plain) {
         log::warn!(
             "{} has no chat template llama.cpp can apply; falling back to plain concatenation, \
              which usually degrades instruction following",
@@ -278,6 +321,9 @@ pub(crate) fn run(
     let tok_env = LlamaSampler::llguidance_tok_env(&model);
 
     // Ask the context, not the config: llama.cpp pads `n_ctx` up.
+    if let Some(note) = context_size_note(config.n_ctx, ctx.n_ctx(), model.n_ctx_train()) {
+        log::warn!("{note}");
+    }
     let n_ctx_seq = ctx_per_seq(ctx.n_ctx(), n_seq_max);
     let info = EngineInfo {
         model_path: config.model_path.display().to_string(),
@@ -294,12 +340,13 @@ pub(crate) fn run(
     let mut state = WorkerState {
         model: &model,
         mtmd: mtmd.as_ref(),
-        chat_template,
+        prompt_format,
         tok_env,
         prefix: None,
         conversation: None,
         n_parallel,
         n_ctx_seq: i32::try_from(n_ctx_seq).unwrap_or(i32::MAX),
+        clamp_reported: None,
     };
 
     // `recv` fails once the engine handle is dropped: that is the shutdown signal.
@@ -336,78 +383,10 @@ struct SplitRender {
     tail: String,
 }
 
-/// Pick a chat template llama.cpp will actually apply.
-///
-/// A GGUF carries its chat template as Jinja, but `llama_chat_apply_template`
-/// is the legacy C path: it applies only templates it recognises, by built-in
-/// name or by sniffing familiar markers, and answers anything else with a bare
-/// `-1` that says nothing about why. Current models ship large Jinja templates
-/// for tool calling and thinking — Gemma 4's is 18 KB of macros — so the
-/// model's own template is refused outright and every generation fails.
-///
-/// The template text still identifies the family even when llama.cpp cannot
-/// execute it, so fall back to the matching built-in and confirm by applying
-/// it. Built-ins render the same control tokens the model was trained on
-/// (`<start_of_turn>` for Gemma), which is what actually matters here; what is
-/// lost is only the Jinja-only extras this crate does not use.
-fn resolve_chat_template(model: &LlamaModel) -> Option<LlamaChatTemplate> {
-    // Applying it is the only way to learn whether llama.cpp accepts it.
-    let applies = |template: &LlamaChatTemplate| {
-        LlamaChatMessage::new("user".to_string(), "probe".to_string())
-            .ok()
-            .and_then(|m| model.apply_chat_template(template, &[m], true).ok())
-            .is_some()
-    };
-
-    let own = model.chat_template(None).ok();
-    if let Some(template) = &own {
-        if applies(template) {
-            return own;
-        }
-    }
-
-    // The architecture is the reliable signal. Sniffing the template text does
-    // not work: Gemma 4's builds its turns through macros and contains none of
-    // the control markers verbatim.
-    let arch = model
-        .meta_val_str("general.architecture")
-        .unwrap_or_default()
-        .to_lowercase();
-    let family: &[&str] = if arch.starts_with("gemma") {
-        // Every Gemma generation delimits turns the same way; the built-ins
-        // differ only in extras. Newest first, and each is verified below.
-        &["gemma3", "gemma2", "gemma"]
-    } else if arch.starts_with("llama") {
-        &["llama3", "llama2"]
-    } else if arch.starts_with("mistral") || arch.starts_with("mixtral") {
-        &["mistral-v7", "mistral-v1"]
-    } else if arch.starts_with("qwen") || arch.starts_with("phi") || arch.starts_with("yi") {
-        &["chatml"]
-    } else {
-        &[]
-    };
-
-    // Architecture match first; chatml last, because most instruct models
-    // tolerate it and it still beats plain concatenation.
-    for name in family.iter().copied().chain(std::iter::once("chatml")) {
-        let Ok(template) = LlamaChatTemplate::new(name) else {
-            continue;
-        };
-        if applies(&template) {
-            log::info!(
-                "this model's own chat template is Jinja, which llama.cpp cannot apply; using \
-                 the built-in '{name}' template for architecture '{arch}' instead"
-            );
-            return Some(template);
-        }
-    }
-    None
-}
-
 struct WorkerState<'a> {
     model: &'a LlamaModel,
     mtmd: Option<&'a MtmdContext>,
-    chat_template: Option<LlamaChatTemplate>,
+    prompt_format: PromptFormat,
     tok_env: toktrie::TokEnv,
     prefix: Option<PinnedPrefix>,
     /// What the last conversation left in sequence 0: its prompt and the
@@ -417,6 +396,10 @@ struct WorkerState<'a> {
     /// The per-photo window, i.e. what every budget check has to measure
     /// against. Never `ctx.n_ctx()`, which is the whole cache.
     n_ctx_seq: i32,
+    /// The Max Tokens value the clamp was last reported for. A run clamps
+    /// every photo the same way, and one warning says it; a line per photo
+    /// would bury the rest of the log.
+    clamp_reported: Option<u32>,
 }
 
 impl WorkerState<'_> {
@@ -445,15 +428,31 @@ impl WorkerState<'_> {
     }
 
     fn render(&self, system: &str, user: &str, add_ass: bool) -> Result<String, LlamaError> {
-        let Some(template) = &self.chat_template else {
-            return Ok(if system.is_empty() {
+        match &self.prompt_format {
+            PromptFormat::Gemma4 => {
+                let mut turns = Vec::with_capacity(2);
+                if !system.is_empty() {
+                    turns.push(Turn {
+                        role: "system",
+                        text: system,
+                    });
+                }
+                turns.push(Turn {
+                    role: "user",
+                    text: user,
+                });
+                Ok(render_gemma4(&turns, add_ass))
+            }
+            PromptFormat::Builtin(template) => {
+                let system = (!system.is_empty()).then_some(system);
+                self.apply_template(template, system, user, add_ass)
+            }
+            PromptFormat::Plain => Ok(if system.is_empty() {
                 user.to_string()
             } else {
                 format!("{system}\n\n{user}")
-            });
-        };
-        let system = (!system.is_empty()).then_some(system);
-        self.apply_template(template, system, user, add_ass)
+            }),
+        }
     }
 
     /// Render the complete prompt once, then cut it immediately after the
@@ -669,6 +668,7 @@ impl WorkerState<'_> {
                     prompt_tokens: slot.prompt_tokens,
                     completion_tokens: slot.completion_tokens,
                     prefix_reused,
+                    finish: slot.finish,
                 });
             }
         }
@@ -756,6 +756,29 @@ impl WorkerState<'_> {
         Ok(())
     }
 
+    /// [`fit_output_budget`] against this engine's per-photo window, saying
+    /// so when Max Tokens had to give way.
+    fn output_budget(&mut self, prompt: PromptSize, max_tokens: u32) -> Result<u32, LlamaError> {
+        let budget = fit_output_budget(prompt, max_tokens, self.n_ctx_seq)?;
+        if budget < max_tokens {
+            let message = format!(
+                "Max Tokens {max_tokens} does not fit beside a {}-token photo prompt in the {} \
+                 tokens each photo gets of the context window; answering in at most {budget} \
+                 tokens instead. A complete answer needs a few hundred, so this costs nothing \
+                 unless the model rambles. Raise Context size for more room.",
+                prompt.total(),
+                self.n_ctx_seq
+            );
+            if self.clamp_reported == Some(max_tokens) {
+                log::debug!("{message}");
+            } else {
+                self.clamp_reported = Some(max_tokens);
+                log::warn!("{message} (Logged once per run.)");
+            }
+        }
+        Ok(budget)
+    }
+
     fn prefill_one(
         &mut self,
         ctx: &mut LlamaContext,
@@ -795,11 +818,10 @@ impl WorkerState<'_> {
             (0, whole, true)
         };
 
-        let n_ctx_seq = self.n_ctx_seq;
         let n_batch = i32::try_from(ctx.n_batch()).unwrap_or(512);
         let mut sampler = self.build_sampler(request.schema.as_ref(), request.temperature)?;
 
-        let (n_past, tail_tokens) = match self.mtmd {
+        let (n_past, tail_tokens, budget) = match self.mtmd {
             Some(mtmd) => {
                 let bitmap = match &request.image {
                     Some(image) => Some(
@@ -822,13 +844,19 @@ impl WorkerState<'_> {
                         LlamaError::Prompt(format!("preparing the photo prompt failed: {e}"))
                     })?;
                 let tail_tokens = i32::try_from(chunks.total_tokens()).unwrap_or(i32::MAX);
-                check_budget(prefix_len, tail_tokens, request.max_tokens, n_ctx_seq)?;
+                let image = image_tokens(&chunks);
+                let size = PromptSize {
+                    fixed: prefix_len,
+                    text: prefix_len + tail_tokens - image,
+                    image,
+                };
+                let budget = self.output_budget(size, request.max_tokens)?;
                 let n_past = chunks
                     .eval_chunks(mtmd, ctx, prefix_len, seq_id, n_batch, true)
                     .map_err(|e| {
                         LlamaError::Inference(format!("evaluating the photo prompt failed: {e}"))
                     })?;
-                (n_past, tail_tokens)
+                (n_past, tail_tokens, budget)
             }
             None => {
                 let bos = if add_special {
@@ -840,7 +868,12 @@ impl WorkerState<'_> {
                     LlamaError::Prompt(format!("tokenizing the prompt failed: {e}"))
                 })?;
                 let tail_tokens = i32::try_from(tokens.len()).unwrap_or(i32::MAX);
-                check_budget(prefix_len, tail_tokens, request.max_tokens, n_ctx_seq)?;
+                let size = PromptSize {
+                    fixed: prefix_len,
+                    text: prefix_len + tail_tokens,
+                    image: 0,
+                };
+                let budget = self.output_budget(size, request.max_tokens)?;
 
                 let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
                 for (offset, token) in tokens.iter().enumerate() {
@@ -854,7 +887,7 @@ impl WorkerState<'_> {
                 ctx.decode(&mut batch).map_err(|e| {
                     LlamaError::Inference(format!("evaluating the prompt failed: {e}"))
                 })?;
-                (prefix_len + tail_tokens, tail_tokens)
+                (prefix_len + tail_tokens, tail_tokens, budget)
             }
         };
 
@@ -881,15 +914,18 @@ impl WorkerState<'_> {
             text: String::new(),
             bytes: Vec::new(),
             sampler,
-            budget: request.max_tokens.max(1),
+            budget,
             next_input: None,
             logit_idx: -1,
             done: false,
+            finish: FinishReason::Stop,
+            guard: RepetitionGuard::default(),
         };
         if self.model.is_eog_token(first) {
             slot.done = true;
         } else {
-            slot.push_token(self.model, first);
+            // A single token cannot be a loop yet.
+            let _ = slot.push_token(self.model, first);
             slot.next_input = Some(first);
         }
         Ok(slot)
@@ -910,14 +946,26 @@ impl WorkerState<'_> {
             }
             text
         };
-        let Some(template) = &self.chat_template else {
-            let mut prompt = messages
-                .iter()
-                .map(|m| format!("{}: {}", m.role, content(m)))
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            prompt.push_str("\n\nassistant:");
-            return Ok(prompt);
+        let template = match &self.prompt_format {
+            PromptFormat::Gemma4 => {
+                let texts: Vec<String> = messages.iter().map(content).collect();
+                let turns: Vec<Turn<'_>> = messages
+                    .iter()
+                    .zip(&texts)
+                    .map(|(m, text)| Turn { role: m.role, text })
+                    .collect();
+                return Ok(render_gemma4(&turns, true));
+            }
+            PromptFormat::Builtin(template) => template,
+            PromptFormat::Plain => {
+                let mut prompt = messages
+                    .iter()
+                    .map(|m| format!("{}: {}", m.role, content(m)))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                prompt.push_str("\n\nassistant:");
+                return Ok(prompt);
+            }
         };
         let turns = messages
             .iter()
@@ -1046,6 +1094,7 @@ impl WorkerState<'_> {
         let mut bytes = Vec::new();
         let mut stream = Utf8Stream::default();
         let mut completion_tokens = 0u32;
+        let mut finish = FinishReason::Stop;
         let mut batch = LlamaBatch::new(1, 1);
         while !self.model.is_eog_token(token) {
             // A piece that will not render costs its text, not the answer —
@@ -1056,7 +1105,15 @@ impl WorkerState<'_> {
             if let (Some(deltas), Some(text)) = (deltas, stream.push(&piece)) {
                 let _ = deltas.send(text);
             }
-            if completion_tokens >= budget || n_past >= n_ctx_seq || abandoned() {
+            if completion_tokens >= budget {
+                finish = FinishReason::Length;
+                break;
+            }
+            if n_past >= n_ctx_seq {
+                finish = FinishReason::ContextFull;
+                break;
+            }
+            if abandoned() {
                 break;
             }
             batch.clear();
@@ -1080,6 +1137,7 @@ impl WorkerState<'_> {
             prompt_tokens: prompt_tokens.cast_unsigned(),
             completion_tokens,
             prefix_reused: reused,
+            finish,
         };
         Ok((output, items))
     }
@@ -1132,19 +1190,27 @@ impl WorkerState<'_> {
     ) -> Result<LlamaSampler, LlamaError> {
         let mut stages = Vec::new();
         if let Some(schema) = schema {
-            let factory = llguidance::ParserFactory::new_simple(&self.tok_env)
-                .map_err(|e| LlamaError::Prompt(format!("grammar setup failed: {e}")))?;
-            let grammar = llguidance::api::TopLevelGrammar::from_json_schema(schema.clone());
-            // `Matcher::new` swallows a failed parser into a poisoned matcher
-            // that rejects every token, which surfaces much later as a baffling
-            // "byte '{' fails parse". Fail here, with the schema's actual error.
-            let parser = factory.create_parser(grammar).map_err(|e| {
-                LlamaError::Prompt(format!(
-                    "the response schema is not usable as a grammar: {e}"
-                ))
-            })?;
+            let parser = json_parser(&self.tok_env, schema)?;
             stages.push(LlamaSampler::from(llguidance::Matcher::new(Ok(parser))));
         }
+        // DRY penalises a token for extending a sequence that already occurred
+        // earlier in the answer, more steeply the longer the repeat. It works
+        // against the loops of issue #490 without touching what a normal
+        // answer looks like: the breakers reset it at every quote, colon and
+        // newline, so the JSON's own structure and a keyword that recurs in
+        // another group are never penalised, and nothing shorter than
+        // `allowed_length` + 1 tokens counts as a repeat. Applied after the
+        // grammar, it only ever reorders tokens the grammar allows; a token
+        // the grammar forces is still the one chosen. Values are the ones its
+        // author recommends.
+        stages.push(LlamaSampler::dry(
+            self.model,
+            DRY_MULTIPLIER,
+            DRY_BASE,
+            DRY_ALLOWED_LENGTH,
+            DRY_PENALTY_LAST_N,
+            ["\n", ":", "\"", "*"],
+        ));
         if temperature <= 0.0 {
             stages.push(LlamaSampler::greedy());
         } else {
@@ -1170,8 +1236,14 @@ impl WorkerState<'_> {
                 if slot.done {
                     continue;
                 }
-                if slot.completion_tokens >= slot.budget || slot.n_past >= n_ctx_seq {
+                if slot.completion_tokens >= slot.budget {
                     slot.done = true;
+                    slot.finish = FinishReason::Length;
+                    continue;
+                }
+                if slot.n_past >= n_ctx_seq {
+                    slot.done = true;
+                    slot.finish = FinishReason::ContextFull;
                     continue;
                 }
                 let Some(token) = slot.next_input else {
@@ -1205,7 +1277,19 @@ impl WorkerState<'_> {
                     slot.next_input = None;
                     continue;
                 }
-                slot.push_token(self.model, token);
+                if let Some(period) = slot.push_token(self.model, token) {
+                    // Every further token would repeat the loop until the
+                    // budget ran out; see `crate::repetition`.
+                    log::info!(
+                        "llama: stopped an answer after {} tokens because it keeps repeating a \
+                         {period}-token sequence",
+                        slot.completion_tokens
+                    );
+                    slot.done = true;
+                    slot.finish = FinishReason::Repetition;
+                    slot.next_input = None;
+                    continue;
+                }
                 slot.next_input = Some(token);
             }
         }
@@ -1235,14 +1319,20 @@ struct Slot {
     next_input: Option<LlamaToken>,
     logit_idx: i32,
     done: bool,
+    /// Why the answer ended; meaningful once `done`.
+    finish: FinishReason,
+    guard: RepetitionGuard,
 }
 
 impl Slot {
-    fn push_token(&mut self, model: &LlamaModel, token: LlamaToken) {
+    /// Append a token to the answer. Returns the length of the repeated unit
+    /// once the answer has started looping.
+    fn push_token(&mut self, model: &LlamaModel, token: LlamaToken) -> Option<usize> {
         if let Ok(piece) = token_bytes(model, token) {
             self.bytes.extend_from_slice(&piece);
         }
         self.completion_tokens += 1;
+        self.guard.push(token.0)
     }
 
     fn finish(&mut self) {
@@ -1407,25 +1497,150 @@ fn check_chat_budget(
     Ok(())
 }
 
+/// What one photo's prompt is made of, in tokens.
+#[derive(Debug, Clone, Copy)]
+struct PromptSize {
+    /// The pinned run-constant part (system prompt, keyword taxonomy, catalog
+    /// vocabulary). Zero when the prompt could not be split and was evaluated
+    /// whole, in which case all of its text counts as `text`.
+    fixed: i32,
+    /// Every text token, `fixed` included.
+    text: i32,
+    /// The photo, as the projector encodes it. A fixed count for Gemma; for
+    /// Qwen2.5-VL it grows with the image's size, which is why the same photo
+    /// costs that model three to four times the tokens.
+    image: i32,
+}
+
+impl PromptSize {
+    fn total(self) -> i64 {
+        i64::from(self.text) + i64::from(self.image)
+    }
+}
+
+/// The output budget a photo actually gets: Max Tokens, clamped to what its
+/// window has left after the prompt.
+///
 /// `n_ctx_seq` is the window *one photo* gets, not the whole cache — see
-/// [`ctx_per_seq`].
-fn check_budget(
-    prefix_len: i32,
-    tail_tokens: i32,
+/// [`ctx_per_seq`]. Max Tokens is a ceiling, not a request for that many
+/// tokens: a successful answer needs a few hundred, so refusing every photo
+/// whose prompt plus Max Tokens overruns the window failed whole runs before
+/// the model was ever asked (issue #490). Only a prompt that leaves less than
+/// [`MIN_OUTPUT_TOKENS`] is refused, and the error names what actually fills
+/// the window.
+fn fit_output_budget(
+    prompt: PromptSize,
     max_tokens: u32,
     n_ctx_seq: i32,
-) -> Result<(), LlamaError> {
-    let needed = i64::from(prefix_len) + i64::from(tail_tokens) + i64::from(max_tokens);
-    if needed > i64::from(n_ctx_seq) {
-        return Err(LlamaError::ContextOverflow(format!(
-            "the prompt ({} tokens) plus the requested {max_tokens} output tokens exceeds the \
-             {n_ctx_seq} tokens each photo gets of the context window. Lower Max Tokens, shrink \
-             the keyword taxonomy, lower Photos in parallel, or raise the context size in the \
-             plugin settings.",
-            prefix_len + tail_tokens
-        )));
+) -> Result<u32, LlamaError> {
+    let room = i64::from(n_ctx_seq) - prompt.total() - i64::from(OUTPUT_SAFETY_MARGIN);
+    let requested = max_tokens.max(1);
+    if room >= i64::from(requested) {
+        return Ok(requested);
     }
-    Ok(())
+    // An explicitly small Max Tokens is the user's call; only the clamp is
+    // held to the minimum.
+    if room >= i64::from(MIN_OUTPUT_TOKENS.min(requested)) {
+        return Ok(u32::try_from(room).unwrap_or(requested));
+    }
+    Err(LlamaError::ContextOverflow(overflow_message(
+        prompt, room, n_ctx_seq,
+    )))
+}
+
+/// Why a photo's prompt does not leave room for an answer, naming the part
+/// that is large. The keyword taxonomy is the lever only when the text is what
+/// fills the window; with Qwen2.5-VL it is usually the photo.
+fn overflow_message(prompt: PromptSize, room: i64, n_ctx_seq: i32) -> String {
+    let total = prompt.total();
+    let left = room.max(0);
+    let head = format!(
+        "this photo's prompt is {total} tokens, which leaves {left} of the {n_ctx_seq} tokens \
+         each photo gets of the context window for the answer (at least {MIN_OUTPUT_TOKENS} \
+         are needed)."
+    );
+    if i64::from(prompt.image) >= i64::from(prompt.text) {
+        format!(
+            "{head} The photo itself takes {} of them: this model spends more tokens on a larger \
+             image. Raise Context size in Plug-in Manager (or set Photos in parallel to 1), or \
+             choose a smaller export size.",
+            prompt.image
+        )
+    } else {
+        let fixed = if prompt.fixed > 0 {
+            format!(
+                " ({} of them the system prompt, keyword taxonomy and catalog vocabulary)",
+                prompt.fixed
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "{head} The text takes {}{fixed}. Raise Context size in Plug-in Manager (or set \
+             Photos in parallel to 1), shrink the keyword taxonomy, or set Catalog vocabulary to \
+             Automatic.",
+            prompt.text
+        )
+    }
+}
+
+/// DRY sampler settings; see [`WorkerState::build_sampler`].
+const DRY_MULTIPLIER: f32 = 0.8;
+const DRY_BASE: f32 = 1.75;
+const DRY_ALLOWED_LENGTH: i32 = 2;
+/// How far back a repeat is looked for, in tokens: longer than any loop
+/// period worth catching, short enough to cost nothing per token.
+const DRY_PENALTY_LAST_N: i32 = 1024;
+
+/// How the grammar lays out JSON: on one line, with the separators models
+/// write most often. llguidance otherwise allows any run of spaces, tabs and
+/// newlines between tokens, and an unbounded run of whitespace is one of the
+/// ways constrained decoding loops (the multi-line Qwen2.5-VL answers of issue
+/// #490 broke off at line 722). Compact output is also fewer tokens.
+fn compact_json_options() -> serde_json::Value {
+    serde_json::json!({
+        "whitespace_flexible": false,
+        "item_separator": ", ",
+        "key_separator": ": ",
+    })
+}
+
+/// The llguidance parser that constrains an answer to `schema`, laid out as
+/// [`compact_json_options`] says unless the schema sets its own `x-guidance`.
+fn json_parser(
+    tok_env: &toktrie::TokEnv,
+    schema: &serde_json::Value,
+) -> Result<llguidance::TokenParser, LlamaError> {
+    let factory = llguidance::ParserFactory::new_simple(tok_env)
+        .map_err(|e| LlamaError::Prompt(format!("grammar setup failed: {e}")))?;
+    let mut schema = schema.clone();
+    if let Some(object) = schema.as_object_mut() {
+        object
+            .entry("x-guidance")
+            .or_insert_with(compact_json_options);
+    }
+    let grammar = llguidance::api::TopLevelGrammar::from_json_schema(schema);
+    // `Matcher::new` swallows a failed parser into a poisoned matcher that
+    // rejects every token, which surfaces much later as a baffling "byte '{'
+    // fails parse". Fail here, with the schema's actual error.
+    factory.create_parser(grammar).map_err(|e| {
+        LlamaError::Prompt(format!(
+            "the response schema is not usable as a grammar: {e}"
+        ))
+    })
+}
+
+/// Image tokens in a tokenized prompt: every chunk that is not text.
+fn image_tokens(chunks: &MtmdInputChunks) -> i32 {
+    let mut total = 0usize;
+    for index in 0..chunks.len() {
+        if let Some(chunk) = chunks.get(index) {
+            if !matches!(chunk.chunk_type(), MtmdInputChunkType::Text) {
+                total += chunk.n_tokens();
+            }
+        }
+    }
+    i32::try_from(total).unwrap_or(i32::MAX)
 }
 
 /// `LlamaError` is not `Clone` by design (it wraps opaque native failures), but
@@ -1509,18 +1724,90 @@ mod tests {
         assert!(err.contains("Start a new chat"), "{err}");
     }
 
-    #[test]
-    fn budget_check_rejects_overflow_before_any_decode() {
-        assert!(check_budget(1000, 500, 200, 4096).is_ok());
-        let err = check_budget(3000, 1000, 512, 4096).unwrap_err();
-        assert!(matches!(err, LlamaError::ContextOverflow(_)));
-        assert!(err.to_string().contains("4096 tokens each photo gets"));
+    /// A prompt of `text` text tokens (`fixed` of them pinned) and `image`
+    /// image tokens.
+    fn prompt(fixed: i32, text: i32, image: i32) -> PromptSize {
+        PromptSize { fixed, text, image }
     }
 
     #[test]
-    fn budget_check_is_exact_at_the_boundary() {
-        assert!(check_budget(2000, 1000, 1096, 4096).is_ok());
-        assert!(check_budget(2000, 1000, 1097, 4096).is_err());
+    fn max_tokens_that_fit_are_left_alone() {
+        assert_eq!(
+            fit_output_budget(prompt(1000, 1200, 300), 2048, 8192).unwrap(),
+            2048
+        );
+    }
+
+    /// Issue #490: a 4635-token prompt and Max Tokens 6144 in an 8192 window
+    /// failed every photo before the model was asked, though an answer needs
+    /// a few hundred tokens. Now the answer gets the rest of the window.
+    #[test]
+    fn max_tokens_that_do_not_fit_are_clamped_to_the_rest_of_the_window() {
+        let budget = fit_output_budget(prompt(900, 1000, 3635), 6144, 8192).unwrap();
+        assert_eq!(budget, 8192 - 4635 - OUTPUT_SAFETY_MARGIN);
+    }
+
+    #[test]
+    fn the_clamp_is_exact_at_the_boundary() {
+        let fits = 4096 - 3000 - i32::try_from(OUTPUT_SAFETY_MARGIN).unwrap();
+        let fits = u32::try_from(fits).unwrap();
+        assert_eq!(
+            fit_output_budget(prompt(0, 3000, 0), fits, 4096).unwrap(),
+            fits
+        );
+        assert_eq!(
+            fit_output_budget(prompt(0, 3000, 0), fits + 1, 4096).unwrap(),
+            fits
+        );
+    }
+
+    #[test]
+    fn a_prompt_that_leaves_too_little_room_is_refused_before_any_decode() {
+        let left = MIN_OUTPUT_TOKENS - 1;
+        let total = 8192 - i32::try_from(OUTPUT_SAFETY_MARGIN + left).unwrap();
+        let err = fit_output_budget(prompt(0, total, 0), 2048, 8192).unwrap_err();
+        assert!(matches!(err, LlamaError::ContextOverflow(_)));
+        assert!(
+            err.to_string().contains("8192 tokens each photo gets"),
+            "{err}"
+        );
+        // One more token of room and it runs, clamped.
+        let total = total - 1;
+        assert_eq!(
+            fit_output_budget(prompt(0, total, 0), 2048, 8192).unwrap(),
+            MIN_OUTPUT_TOKENS
+        );
+    }
+
+    /// A Max Tokens the user set below the minimum is theirs to set; only the
+    /// clamp is held to it.
+    #[test]
+    fn a_small_max_tokens_is_not_raised() {
+        assert_eq!(
+            fit_output_budget(prompt(0, 1000, 0), 100, 4096).unwrap(),
+            100
+        );
+    }
+
+    /// Qwen2.5-VL spends thousands of tokens on a photo that costs Gemma a few
+    /// hundred: that is the image, and the keyword taxonomy is not the lever.
+    #[test]
+    fn an_overflow_names_the_image_when_the_image_fills_the_window() {
+        let err = fit_output_budget(prompt(600, 800, 7300), 2048, 8192)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("The photo itself takes 7300"), "{err}");
+        assert!(err.contains("export size"), "{err}");
+        assert!(!err.contains("taxonomy"), "{err}");
+    }
+
+    #[test]
+    fn an_overflow_names_the_taxonomy_when_the_text_fills_the_window() {
+        let err = fit_output_budget(prompt(7000, 7700, 300), 2048, 8192)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("The text takes 7700 (7000 of them"), "{err}");
+        assert!(err.contains("keyword taxonomy"), "{err}");
     }
 
     /// The bug behind #316: the KV cache is split per sequence, so budgeting
@@ -1536,12 +1823,18 @@ mod tests {
     }
 
     #[test]
-    fn a_budget_that_fits_the_whole_cache_can_still_overflow_one_sequence() {
+    fn a_budget_that_fits_the_whole_cache_is_still_clamped_to_one_sequence() {
         // 8192 total, two photos at once: 4096 each. A 2000-token prompt asking
         // for 4096 output fits the cache and not the sequence.
         let per_seq = i32::try_from(ctx_per_seq(8192, 2)).unwrap();
-        assert!(check_budget(1500, 500, 4096, 8192).is_ok());
-        assert!(check_budget(1500, 500, 4096, per_seq).is_err());
+        assert_eq!(
+            fit_output_budget(prompt(1500, 2000, 0), 4096, 8192).unwrap(),
+            4096
+        );
+        assert_eq!(
+            fit_output_budget(prompt(1500, 2000, 0), 4096, per_seq).unwrap(),
+            4096 - 2000 - OUTPUT_SAFETY_MARGIN
+        );
     }
 
     #[test]
@@ -1555,6 +1848,81 @@ mod tests {
         // Never below one, however small the context.
         assert_eq!(parallel_that_fits(1024, 4), 1);
         assert_eq!(parallel_that_fits(8192, 0), 1);
+    }
+
+    /// Whether the grammar for `schema` accepts `answer` as a complete
+    /// answer, fed one byte per token.
+    fn grammar_accepts(schema: &serde_json::Value, answer: &str) -> bool {
+        let env = toktrie::ApproximateTokEnv::single_byte_env();
+        let parser = json_parser(&env, schema).expect("schema compiles");
+        let mut matcher = llguidance::Matcher::new(Ok(parser));
+        let tokens: Vec<u32> = answer.bytes().map(u32::from).collect();
+        matcher.consume_tokens(&tokens).is_ok()
+            && !matcher.is_error()
+            && matcher.is_accepting().unwrap_or(false)
+    }
+
+    fn caption_schema() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "caption": {"type": "string", "maxLength": 12},
+                "keywords": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+            },
+            "required": ["caption", "keywords"],
+        })
+    }
+
+    #[test]
+    fn the_grammar_takes_one_line_of_json() {
+        let schema = caption_schema();
+        assert!(grammar_accepts(
+            &schema,
+            r#"{"caption": "A dune.", "keywords": ["sand", "sky"]}"#
+        ));
+        // No run of whitespace or newlines to loop in.
+        assert!(!grammar_accepts(
+            &schema,
+            "{\n  \"caption\": \"A dune.\",\n  \"keywords\": [\"sand\"]\n}"
+        ));
+    }
+
+    #[test]
+    fn the_grammar_enforces_length_and_item_bounds() {
+        let schema = caption_schema();
+        assert!(!grammar_accepts(
+            &schema,
+            r#"{"caption": "A dune, a dune, a dune.", "keywords": []}"#
+        ));
+        assert!(!grammar_accepts(
+            &schema,
+            r#"{"caption": "A dune.", "keywords": ["a", "b", "c"]}"#
+        ));
+    }
+
+    /// A schema that brings its own layout keeps it.
+    #[test]
+    fn a_schema_with_its_own_layout_keeps_it() {
+        let mut schema = caption_schema();
+        schema["x-guidance"] = serde_json::json!({"whitespace_flexible": true});
+        assert!(grammar_accepts(
+            &schema,
+            "{\n\"caption\": \"A dune.\",\n\"keywords\": []\n}"
+        ));
+    }
+
+    #[test]
+    fn a_context_other_than_the_requested_one_is_named() {
+        assert_eq!(context_size_note(16384, 16384, 131_072), None);
+        let smaller = context_size_note(16384, 8192, 131_072).unwrap();
+        assert!(
+            smaller.contains("requested n_ctx=16384, effective n_ctx=8192 because"),
+            "{smaller}"
+        );
+        let padded = context_size_note(10000, 10240, 131_072).unwrap();
+        assert!(padded.contains("rounds the context up"), "{padded}");
+        let past_training = context_size_note(65536, 65536, 32768).unwrap();
+        assert!(past_training.contains("trained on"), "{past_training}");
     }
 
     #[test]

@@ -21,11 +21,13 @@
 
 mod device;
 mod engine;
+mod prompt_format;
+mod repetition;
 mod worker;
 
 pub use engine::{
-    ChatMessage, ChatRequest, EngineInfo, GenerationOutput, GenerationRequest, LlamaEngine,
-    LlamaEngineConfig,
+    ChatMessage, ChatRequest, EngineInfo, FinishReason, GenerationOutput, GenerationRequest,
+    LlamaEngine, LlamaEngineConfig,
 };
 
 /// A decoded RGB image, 3 bytes per pixel, ready for `MtmdBitmap`.

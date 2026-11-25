@@ -1183,6 +1183,7 @@ mod tests {
                 prompt_tokens: 42,
                 completion_tokens: 7,
                 prefix_reused: false,
+                ..Default::default()
             })
         }
     }

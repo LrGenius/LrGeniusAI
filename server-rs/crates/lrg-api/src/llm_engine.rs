@@ -33,6 +33,65 @@ pub struct LlmEngineSettings {
     pub n_gpu_layers: u32,
 }
 
+impl LlmEngineSettings {
+    /// What differs from `previous`, one `"field old -> new"` entry per
+    /// change, for the log line that explains a reload.
+    ///
+    /// A reload costs as long as reading the weights, so one that happens for
+    /// no reason the user can see is worth naming: two routes that send
+    /// different settings (issue #490: one sent the context size, the other
+    /// did not) made the model reload every time they alternated, and nothing
+    /// in the log said why.
+    #[must_use]
+    pub fn changes_from(&self, previous: &LlmEngineSettings) -> Vec<String> {
+        let mut changes = Vec::new();
+        if self.model_path != previous.model_path {
+            changes.push(format!(
+                "model {} -> {}",
+                previous.model_path.display(),
+                self.model_path.display()
+            ));
+        }
+        if self.mmproj_path != previous.mmproj_path {
+            let shown = |p: &Option<PathBuf>| {
+                p.as_ref()
+                    .map_or_else(|| "none".to_string(), |p| p.display().to_string())
+            };
+            changes.push(format!(
+                "mmproj {} -> {}",
+                shown(&previous.mmproj_path),
+                shown(&self.mmproj_path)
+            ));
+        }
+        if self.n_ctx != previous.n_ctx {
+            changes.push(format!("n_ctx {} -> {}", previous.n_ctx, self.n_ctx));
+        }
+        if self.n_parallel != previous.n_parallel {
+            changes.push(format!(
+                "n_parallel {} -> {}",
+                previous.n_parallel, self.n_parallel
+            ));
+        }
+        if self.n_gpu_layers != previous.n_gpu_layers {
+            changes.push(format!(
+                "gpu_layers {} -> {}",
+                gpu_layers_label(previous.n_gpu_layers),
+                gpu_layers_label(self.n_gpu_layers)
+            ));
+        }
+        changes
+    }
+}
+
+/// `u32::MAX` is "all layers"; printing four billion reads like a bug.
+fn gpu_layers_label(n: u32) -> String {
+    if n == u32::MAX {
+        "all".to_string()
+    } else {
+        n.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LlmEngineStatus {
     /// `"loaded"`, `"not_loaded"`, or `"unsupported"` when the binary was built
@@ -63,8 +122,18 @@ mod imp {
         ChatMessage, ChatRequest, GenerationRequest, LlamaEngine, LlamaEngineConfig, RgbImage,
     };
     use lrg_providers::local::{
-        LocalChatRequest, LocalEngine, LocalRequest, LocalResponse, SharedLocalEngine, TextDeltas,
+        FinishReason, LocalChatRequest, LocalEngine, LocalRequest, LocalResponse,
+        SharedLocalEngine, TextDeltas,
     };
+
+    fn finish_reason(finish: lrg_llama::FinishReason) -> FinishReason {
+        match finish {
+            lrg_llama::FinishReason::Stop => FinishReason::Stop,
+            lrg_llama::FinishReason::Length => FinishReason::Length,
+            lrg_llama::FinishReason::ContextFull => FinishReason::ContextFull,
+            lrg_llama::FinishReason::Repetition => FinishReason::Repetition,
+        }
+    }
 
     /// Wraps a loaded engine so `lrg-providers` can drive it without knowing
     /// anything about llama.cpp.
@@ -109,6 +178,7 @@ mod imp {
                                 prompt_tokens: output.prompt_tokens,
                                 completion_tokens: output.completion_tokens,
                                 prefix_reused: output.prefix_reused,
+                                finish: finish_reason(output.finish),
                             })
                             .map_err(|e| e.to_string())
                     })
@@ -173,6 +243,7 @@ mod imp {
                 prompt_tokens: output.prompt_tokens,
                 completion_tokens: output.completion_tokens,
                 prefix_reused: output.prefix_reused,
+                finish: finish_reason(output.finish),
             })
         }
 
@@ -228,7 +299,28 @@ mod imp {
                 n_gpu_layers: settings.n_gpu_layers,
                 n_threads: None,
             };
-            log::info!("Loading local LLM: {}", settings.model_path.display());
+            // Name what changed when this replaces a loaded engine: a reload
+            // nobody asked for is how two routes sending different settings
+            // show up (see `LlmEngineSettings::changes_from`).
+            let previous = self
+                .loaded
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|l| l.settings.clone());
+            if let Some(previous) = previous {
+                log::info!(
+                    "Reloading local LLM because the request asks for other settings: {}",
+                    settings.changes_from(&previous).join(", ")
+                );
+            }
+            log::info!(
+                "Loading local LLM: {} (requested n_ctx={} n_parallel={} gpu_layers={})",
+                settings.model_path.display(),
+                settings.n_ctx,
+                settings.n_parallel,
+                super::gpu_layers_label(settings.n_gpu_layers),
+            );
 
             // Drop any resident engine *before* building the new one.
             //
@@ -418,6 +510,13 @@ pub fn settings_for(
     mmproj_path: Option<PathBuf>,
     overrides: EngineOverrides,
 ) -> LlmEngineSettings {
+    if overrides.n_ctx.is_none() {
+        // Every plugin route sends the user's context size; one that does not
+        // silently runs on the default (issue #490), which this makes visible.
+        log::debug!(
+            "the request names no llm_n_ctx; the local model uses LRG_LLAMA_N_CTX or the default"
+        );
+    }
     LlmEngineSettings {
         model_path,
         mmproj_path,
@@ -471,5 +570,42 @@ mod tests {
         // cannot be changed on a live context.
         other.n_ctx = 4096;
         assert_ne!(base, other);
+    }
+
+    /// The context size the user set has to reach the engine: a request that
+    /// names one gets it, whatever the environment default is.
+    #[test]
+    fn a_requested_context_size_wins_over_the_default() {
+        let settings = settings_for(
+            "/m/a.gguf".into(),
+            None,
+            EngineOverrides {
+                n_ctx: Some(16384),
+                n_parallel: Some(1),
+                n_gpu_layers: None,
+            },
+        );
+        assert_eq!(settings.n_ctx, 16384);
+        assert_eq!(settings.n_parallel, 1);
+    }
+
+    #[test]
+    fn a_reload_names_what_changed() {
+        let before = LlmEngineSettings {
+            model_path: "/models/a.gguf".into(),
+            mmproj_path: None,
+            n_ctx: 8192,
+            n_parallel: 1,
+            n_gpu_layers: u32::MAX,
+        };
+        let mut after = before.clone();
+        assert!(after.changes_from(&before).is_empty());
+
+        after.n_ctx = 16384;
+        after.n_gpu_layers = 20;
+        assert_eq!(
+            after.changes_from(&before),
+            vec!["n_ctx 8192 -> 16384", "gpu_layers all -> 20"]
+        );
     }
 }

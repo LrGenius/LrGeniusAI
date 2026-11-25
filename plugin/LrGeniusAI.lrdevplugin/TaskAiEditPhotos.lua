@@ -886,6 +886,7 @@ local function retoucherFields(options)
 	if not connection then
 		return nil, problem
 	end
+	local engine = SearchIndexAPI.localEngineFields()
 	return {
 		provider = provider,
 		model = model,
@@ -896,9 +897,9 @@ local function retoucherFields(options)
 		language = prefs.generateLanguage or "English",
 		max_edits = tostring(options.maxEdits or 3),
 		masks = tostring(options.useMasks == true),
-		llm_n_ctx = prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
-		llm_n_parallel = prefs.llmParallel and tostring(prefs.llmParallel) or nil,
-		llm_gpu_layers = prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
+		llm_n_ctx = engine.llm_n_ctx,
+		llm_n_parallel = engine.llm_n_parallel,
+		llm_gpu_layers = engine.llm_gpu_layers,
 	},
 		nil
 end

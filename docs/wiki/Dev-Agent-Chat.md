@@ -57,7 +57,9 @@ read-only switch and its "stop agent control" button.
 
 A local model's native tool-call format lives in its Jinja chat template, and
 llama.cpp's C API cannot render Jinja — it applies only built-in templates that
-know system, user and assistant. So the chat does not use the native format.
+know system, user and assistant (Gemma 4, whose turn tokens no built-in writes,
+is rendered by `lrg-llama` itself; see *Local LLM* in the server README). So
+the chat does not use the native format.
 Both engines can constrain decoding to a JSON Schema, and every answer is
 constrained to one of
 

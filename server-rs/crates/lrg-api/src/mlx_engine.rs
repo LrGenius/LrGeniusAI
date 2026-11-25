@@ -22,7 +22,8 @@ use serde::Serialize;
 
 use lrg_mlx::{ChatMessage, ChatRequest, GenerationRequest, MlxEngine, MlxEngineConfig, RgbImage};
 use lrg_providers::local::{
-    LocalChatRequest, LocalEngine, LocalRequest, LocalResponse, SharedLocalEngine, TextDeltas,
+    FinishReason, LocalChatRequest, LocalEngine, LocalRequest, LocalResponse, SharedLocalEngine,
+    TextDeltas,
 };
 
 /// How long the model may sit unused before it is dropped. Matches the ONNX
@@ -95,6 +96,8 @@ impl LocalEngine for MlxLocalEngine {
                             prompt_tokens: output.prompt_tokens,
                             completion_tokens: output.completion_tokens,
                             prefix_reused: output.prefix_reused,
+                            // The sidecar does not say why an answer ended.
+                            finish: FinishReason::Unknown,
                         })
                         .map_err(|e| e.to_string())
                 })
@@ -157,6 +160,7 @@ impl LocalEngine for MlxLocalEngine {
             prompt_tokens: output.prompt_tokens,
             completion_tokens: output.completion_tokens,
             prefix_reused: output.prefix_reused,
+            finish: FinishReason::Unknown,
         })
     }
 }

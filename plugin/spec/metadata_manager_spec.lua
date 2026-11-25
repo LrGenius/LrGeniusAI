@@ -480,6 +480,26 @@ describe("MetadataManager.catalogKeywordHierarchy", function()
 		assert.are.same({ Activities = {} }, hierarchyOf({ doubled }, access))
 	end)
 
+	-- What a catalog looks like after several runs of a version without the
+	-- fix: one more "LrGeniusAI" level per run, each with its own copy of the
+	-- categories. Sent as they were, each copy became a label of its own
+	-- ("LrGeniusAI/Places", "LrGeniusAI/LrGeniusAI/Places", ...) and the
+	-- prompt grew from run to run (#490).
+	it("collapses containers nested over several runs into one set of categories", function()
+		local nested = kw("LrGeniusAI", {
+			kw("Places", { kw("Beach") }),
+			kw("LrGeniusAI", {
+				kw("Places", { kw("Dune") }),
+				kw("LrGeniusAI", {
+					kw("Places", { kw("Harbour") }),
+					kw("Weather", { kw("Fog") }),
+				}),
+			}),
+		})
+
+		assert.are.same({ Places = {}, Weather = {} }, hierarchyOf({ nested }, access))
+	end)
+
 	it("leaves out the species taxonomy", function()
 		local species = kw(Defaults.defaultSpeciesKeyword, { kw("Animalia", { kw("Chordata", { kw("Aves") }) }) })
 
