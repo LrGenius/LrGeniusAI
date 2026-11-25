@@ -125,10 +125,130 @@ pub fn prepare_response_structure(request: &MetadataGenerationRequest) -> Value 
     json!({"type": "object", "properties": properties, "required": required})
 }
 
+/// Longest title a decoding grammar allows, in characters.
+pub const TITLE_MAX_CHARS: u64 = 200;
+/// Longest caption: several paragraphs, far beyond what a prompt asks for.
+pub const CAPTION_MAX_CHARS: u64 = 2000;
+/// Longest alt text, when it is generated on its own rather than copied.
+pub const ALT_TEXT_MAX_CHARS: u64 = 1000;
+/// Longest single keyword, alias or translation.
+pub const KEYWORD_MAX_CHARS: u64 = 100;
+/// Most items in any list: keywords, keyword groups, a keyword's aliases.
+pub const LIST_MAX_ITEMS: u64 = 100;
+
+/// `schema` with an upper bound on every string and list that has none, for an
+/// engine that decodes *against* the schema (llama.cpp through llguidance).
+///
+/// An unbounded string is where a looping model spends its whole budget: in
+/// issue #490 Gemma 4 12B filled one JSON string with ~5400 characters of
+/// repetition before Max Tokens cut it off. With a bound, the grammar closes
+/// the string and the answer stays valid JSON. The bounds are far above what
+/// any prompt asks for — they end runaways, they do not shape answers — and a
+/// bound the schema already sets (a translation pair's two items) is kept.
+/// Strings with an `enum` (keyword categories) need none.
+///
+/// Not for the cloud providers: OpenAI's strict mode rejects some of these
+/// keywords outright (see `schema_strict`), and none of them decodes against
+/// the schema token by token.
+#[must_use]
+pub fn bounded_for_constrained_decoding(schema: &Value) -> Value {
+    let mut schema = schema.clone();
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        for (name, property) in properties.iter_mut() {
+            let max_chars = match name.as_str() {
+                "title" => TITLE_MAX_CHARS,
+                "caption" => CAPTION_MAX_CHARS,
+                "alt_text" => ALT_TEXT_MAX_CHARS,
+                _ => KEYWORD_MAX_CHARS,
+            };
+            bound_node(property, max_chars);
+        }
+    }
+    schema
+}
+
+fn bound_node(node: &mut Value, max_chars: u64) {
+    let Some(object) = node.as_object_mut() else {
+        return;
+    };
+    match object.get("type").and_then(Value::as_str) {
+        Some("string") if !object.contains_key("enum") => {
+            object
+                .entry("maxLength")
+                .or_insert_with(|| json!(max_chars));
+        }
+        Some("array") => {
+            object
+                .entry("maxItems")
+                .or_insert_with(|| json!(LIST_MAX_ITEMS));
+        }
+        _ => {}
+    }
+    if let Some(items) = object.get_mut("items") {
+        bound_node(items, max_chars);
+    }
+    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        for property in properties.values_mut() {
+            bound_node(property, max_chars);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{KeywordCategories, KeywordTree};
+
+    #[test]
+    fn constrained_decoding_bounds_every_string_and_list() {
+        let mut req = base_request();
+        req.generate_title = true;
+        req.generate_caption = true;
+        req.generate_keywords = true;
+        req.bilingual_keywords = true;
+        req.generate_aliases = true;
+        req.keyword_categories = Some(KeywordCategories::Flat(vec![
+            "People".into(),
+            "Places".into(),
+        ]));
+        let bounded = bounded_for_constrained_decoding(&prepare_response_structure(&req));
+        let props = &bounded["properties"];
+        assert_eq!(props["title"]["maxLength"], json!(TITLE_MAX_CHARS));
+        assert_eq!(props["caption"]["maxLength"], json!(CAPTION_MAX_CHARS));
+
+        let groups = &props["keywords"];
+        assert_eq!(groups["maxItems"], json!(LIST_MAX_ITEMS));
+        let group = &groups["items"]["properties"];
+        // A category is one of an enum: nothing to bound.
+        assert!(group["category"].get("maxLength").is_none());
+        let leaf = &group["items"]["items"];
+        // The translation pair keeps its own exact bound...
+        assert_eq!(leaf["maxItems"], json!(2));
+        // ...and every term in it gets one.
+        assert_eq!(leaf["items"]["maxItems"], json!(LIST_MAX_ITEMS));
+        assert_eq!(
+            leaf["items"]["items"]["maxLength"],
+            json!(KEYWORD_MAX_CHARS)
+        );
+    }
+
+    #[test]
+    fn constrained_decoding_bounds_alt_text_and_a_flat_keyword_list() {
+        let mut req = base_request();
+        req.generate_alt_text = true;
+        req.generate_keywords = true;
+        let bounded = bounded_for_constrained_decoding(&prepare_response_structure(&req));
+        let props = &bounded["properties"];
+        assert_eq!(props["alt_text"]["maxLength"], json!(ALT_TEXT_MAX_CHARS));
+        assert_eq!(props["keywords"]["maxItems"], json!(LIST_MAX_ITEMS));
+        assert_eq!(
+            props["keywords"]["items"]["maxLength"],
+            json!(KEYWORD_MAX_CHARS)
+        );
+        // The schema the cloud providers get is untouched.
+        let plain = prepare_response_structure(&req);
+        assert!(plain["properties"]["alt_text"].get("maxLength").is_none());
+    }
 
     fn base_request() -> MetadataGenerationRequest {
         MetadataGenerationRequest::default()

@@ -37,12 +37,33 @@ pub struct LocalRequest {
     pub temperature: f32,
 }
 
+/// Why a local engine's answer ended, when the engine says.
+///
+/// It decides what the user is told when the text cannot be used: raising Max
+/// Tokens helps an answer that ran out of tokens, and is exactly the wrong
+/// advice for one that was looping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FinishReason {
+    /// The engine does not report it (the MLX sidecar).
+    #[default]
+    Unknown,
+    /// The model ended the answer itself.
+    Stop,
+    /// The answer spent its whole token budget.
+    Length,
+    /// The context window filled up.
+    ContextFull,
+    /// Stopped early because the answer kept repeating itself.
+    Repetition,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LocalResponse {
     pub text: String,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub prefix_reused: bool,
+    pub finish: FinishReason,
 }
 
 /// Who said one turn of a conversation.

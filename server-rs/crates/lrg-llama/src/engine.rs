@@ -100,6 +100,25 @@ pub struct ChatRequest {
     pub temperature: f32,
 }
 
+/// Why an answer ended. Decides what a caller tells the user when the text
+/// cannot be used: raising Max Tokens helps an answer that ran out of tokens,
+/// and is exactly the wrong advice for one that was looping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishReason {
+    /// The model ended the answer itself, with an end-of-turn token.
+    #[default]
+    Stop,
+    /// The answer spent its whole budget: Max Tokens, or what was left of the
+    /// photo's window when Max Tokens was clamped.
+    Length,
+    /// The photo's share of the context window filled up.
+    ContextFull,
+    /// Stopped early because the answer had started repeating itself; see
+    /// `crate::repetition`.
+    Repetition,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GenerationOutput {
     pub text: String,
@@ -108,6 +127,7 @@ pub struct GenerationOutput {
     /// True when the pinned prefix was reused instead of re-evaluated. Surfaced
     /// so the speedup is visible in `--debug` logs rather than merely believed.
     pub prefix_reused: bool,
+    pub finish: FinishReason,
 }
 
 pub struct LlamaEngine {

@@ -35,9 +35,17 @@ fn main() {
         }
     }
 
-    // Does the vocabulary actually know Gemma's turn tokens? If it does, the
-    // built-in gemma template emits tokens the model was trained on.
-    for probe in ["<start_of_turn>", "<|im_start|>", "<end_of_turn>"] {
+    // Does the vocabulary actually know the turn tokens a template writes? A
+    // marker that takes more than one token reaches the model as plain text:
+    // Gemma 4 has `<|turn>`/`<turn|>` and no `<start_of_turn>` at all, which is
+    // why the engine renders it itself (`src/prompt_format.rs`).
+    for probe in [
+        "<start_of_turn>",
+        "<end_of_turn>",
+        "<|turn>",
+        "<turn|>",
+        "<|im_start|>",
+    ] {
         let toks = model.str_to_token(probe, llama_cpp_2::model::AddBos::Never);
         println!("VOCAB {probe} -> {:?}", toks.map(|t| t.len()));
     }

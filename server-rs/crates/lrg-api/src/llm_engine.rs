@@ -122,8 +122,18 @@ mod imp {
         ChatMessage, ChatRequest, GenerationRequest, LlamaEngine, LlamaEngineConfig, RgbImage,
     };
     use lrg_providers::local::{
-        LocalChatRequest, LocalEngine, LocalRequest, LocalResponse, SharedLocalEngine, TextDeltas,
+        FinishReason, LocalChatRequest, LocalEngine, LocalRequest, LocalResponse,
+        SharedLocalEngine, TextDeltas,
     };
+
+    fn finish_reason(finish: lrg_llama::FinishReason) -> FinishReason {
+        match finish {
+            lrg_llama::FinishReason::Stop => FinishReason::Stop,
+            lrg_llama::FinishReason::Length => FinishReason::Length,
+            lrg_llama::FinishReason::ContextFull => FinishReason::ContextFull,
+            lrg_llama::FinishReason::Repetition => FinishReason::Repetition,
+        }
+    }
 
     /// Wraps a loaded engine so `lrg-providers` can drive it without knowing
     /// anything about llama.cpp.
@@ -168,6 +178,7 @@ mod imp {
                                 prompt_tokens: output.prompt_tokens,
                                 completion_tokens: output.completion_tokens,
                                 prefix_reused: output.prefix_reused,
+                                finish: finish_reason(output.finish),
                             })
                             .map_err(|e| e.to_string())
                     })
@@ -232,6 +243,7 @@ mod imp {
                 prompt_tokens: output.prompt_tokens,
                 completion_tokens: output.completion_tokens,
                 prefix_reused: output.prefix_reused,
+                finish: finish_reason(output.finish),
             })
         }
 

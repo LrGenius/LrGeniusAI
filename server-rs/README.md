@@ -563,11 +563,35 @@ image) or the text (system prompt, keyword taxonomy, catalog vocabulary).
 
 A note on chat templates: llama.cpp's C API applies only templates it
 recognises, so a model shipping a modern Jinja template (Gemma 4's is 18 KB
-of macros) is refused outright. The engine therefore picks a built-in
-template from the GGUF's `general.architecture` and confirms it applies
-before use, logging which one it chose. `cargo run -p lrg-llama --example
-probe_template -- model.gguf` prints what a GGUF reports and which
-templates llama.cpp will accept — start there if a new model misbehaves.
+of macros) is refused outright. The engine then picks a built-in template
+from the GGUF's `general.architecture`, confirms it applies, logs which one
+it chose, and warns when the markers it writes are not control tokens of the
+model. **Gemma 4 is the exception**: its turns are `<|turn>user … <turn|>`,
+and it has no `<start_of_turn>` token, so llama.cpp's built-in `gemma`
+template wrote markers Gemma 4 reads as plain text (issue #490). A model
+whose vocabulary has `<|turn>`/`<turn|>` is rendered by
+`lrg-llama/src/prompt_format.rs` exactly as its canonical template does,
+thinking off (an empty `<|channel>thought\n<channel|>` after the model turn
+opens). `cargo run -p lrg-llama --example probe_template -- model.gguf`
+prints what a GGUF reports, which turn markers its vocabulary knows, and
+which templates llama.cpp will accept — start there if a new model
+misbehaves.
+
+Three things keep a local answer from running away (also issue #490):
+
+- **The grammar is compact and bounded.** Answers are constrained to the
+  response schema as one line of JSON (`", "` and `": "` between items, no
+  free whitespace), and `lrg_providers::schema::bounded_for_constrained_decoding`
+  caps every string and list (caption 2000 characters, a keyword 100, a list
+  100 items) — far above what a prompt asks for.
+- **A DRY sampler** penalises extending a sequence that already occurred in
+  the answer; it resets at quotes, colons and newlines, so the JSON's own
+  structure is never penalised.
+- **Loop detection** (`lrg-llama/src/repetition.rs`) stops an answer once a
+  run of up to 64 tokens has repeated exactly three times in a row over at
+  least 48 tokens. The answer ends with `FinishReason::Repetition`, and the
+  photo fails with an error that says so instead of telling the user to
+  raise Max Tokens.
 
 ### Local LLM (MLX, Apple silicon)
 
