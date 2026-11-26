@@ -29,6 +29,16 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Windows Authenticode signing through SignPath Foundation, switched off for
+# now: with "false" the SignPath steps in build-and-release are skipped, the
+# Windows installer ships unsigned, and the precondition check in validate-tag
+# no longer demands SIGNPATH_API_TOKEN but says in the run summary that the
+# installer is unsigned. The release notes' SmartScreen section and the user
+# docs (FAQ, Troubleshooting) already cover an unsigned installer. Set back to
+# "true" to sign again.
+env:
+  WINDOWS_SIGNING_ENABLED: "false"
+
 jobs:
   validate-tag:
     runs-on: ubuntu-latest
@@ -60,9 +70,11 @@ jobs:
       # is the "a degraded success is not a success" rule in AGENTS.md,
       # applied to the release itself.
       #
-      # Windows signing (SignPath Foundation, free for open source) is always
-      # required. macOS signing needs a paid Apple Developer Program
-      # membership, which the project does not currently have, so an unsigned
+      # Windows signing (SignPath Foundation, free for open source) is
+      # required while WINDOWS_SIGNING_ENABLED (top of this file) is "true";
+      # with "false" the token is not checked and the run summary says the
+      # Windows installer ships unsigned. macOS signing needs a paid Apple
+      # Developer Program membership, which the project does not currently have, so an unsigned
       # .pkg is a deliberate, documented state rather than a mistake: the
       # user docs (Getting-Started, FAQ, Troubleshooting) and the release
       # notes' "If your computer warns about the download" section already
@@ -99,8 +111,12 @@ jobs:
           done
 
           failed=0
-          if [ -z "${SIGNPATH_API_TOKEN:-}" ]; then
-            echo "::error::tagged release is missing SIGNPATH_API_TOKEN - the Windows installer would ship unsigned. Configure the secret, or dry-run with workflow_dispatch off a branch."
+          if [ "${WINDOWS_SIGNING_ENABLED:-}" != "true" ]; then
+            msg="Windows installer ships unsigned (WINDOWS_SIGNING_ENABLED is false, SignPath steps skipped). Users get SmartScreen's 'Run anyway' prompt, which the release notes explain."
+            echo "::warning::$msg"
+            echo "- :warning: $msg" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -z "${SIGNPATH_API_TOKEN:-}" ]; then
+            echo "::error::tagged release is missing SIGNPATH_API_TOKEN - the Windows installer would ship unsigned. Configure the secret, set WINDOWS_SIGNING_ENABLED to false to ship unsigned on purpose, or dry-run with workflow_dispatch off a branch."
             failed=1
           fi
 
@@ -615,7 +631,7 @@ jobs:
       # rather than just the exe: the DLLs are PE files loaded at runtime, so
       # leaving them unsigned undercuts signing the exe at all.
       - name: Upload unsigned backend binaries for signing
-        if: matrix.os_name == 'windows'
+        if: matrix.os_name == 'windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         id: upload-unsigned-exe
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -624,7 +640,7 @@ jobs:
           retention-days: 1
 
       - name: Submit backend exe to SignPath
-        if: matrix.os_name == 'windows'
+        if: matrix.os_name == 'windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         # Held at v2.3 on purpose. v3.0 only swaps the default connector-url for
         # SignPath's new "Pipeline Connector", which checks repository access
         # through the SignPath GitHub App and rejected v3.1.0 with "User has no
@@ -643,7 +659,7 @@ jobs:
           output-artifact-directory: signed-backend-exe
 
       - name: Replace backend binaries with SignPath-signed versions
-        if: matrix.os_name == 'windows'
+        if: matrix.os_name == 'windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -683,7 +699,7 @@ jobs:
 
       # SignPath Foundation signing of the final installer .exe.
       - name: Locate unsigned installer
-        if: matrix.os_name == 'windows'
+        if: matrix.os_name == 'windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         id: locate-installer
         shell: bash
         run: |
@@ -691,7 +707,7 @@ jobs:
           echo "path=$(ls LrGeniusAI-windows-x64-*.exe)" >> "$GITHUB_OUTPUT"
 
       - name: Upload unsigned installer for signing
-        if: matrix.os_name == 'windows'
+        if: matrix.os_name == 'windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         id: upload-unsigned-installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -700,7 +716,7 @@ jobs:
           retention-days: 1
 
       - name: Submit installer to SignPath
-        if: matrix.os_name == 'windows'
+        if: matrix.os_name == 'windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         # Held at v2.3 on purpose. v3.0 only swaps the default connector-url for
         # SignPath's new "Pipeline Connector", which checks repository access
         # through the SignPath GitHub App and rejected v3.1.0 with "User has no
@@ -719,7 +735,7 @@ jobs:
           output-artifact-directory: signed-installer
 
       - name: Replace installer with SignPath-signed version
-        if: matrix.os_name == 'windows'
+        if: matrix.os_name == 'windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         shell: bash
         run: |
           set -euo pipefail

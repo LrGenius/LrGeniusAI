@@ -24,8 +24,11 @@ release yourself** — that is their call after reading it.
   `.github/workflows/release.yml` fails a tag that `origin/main` does not
   contain.
 - CI on that commit is green (lint-format, lua-tests, server-rs-tests).
-- The signing secrets are in place: `SIGNPATH_API_TOKEN` for Windows, and the
-  Apple secrets all or none (a partial set fails `validate-tag`).
+- The signing secrets are in place: `SIGNPATH_API_TOKEN` for Windows (only
+  while `WINDOWS_SIGNING_ENABLED` at the top of `release.yml` is `"true"`; it
+  is `"false"` for now, so the Windows installer ships unsigned and the run
+  summary says so), and the Apple secrets all or none (a partial set fails
+  `validate-tag`).
 - The previous tag, for the version number and the notes:
   `git describe --tags --abbrev=0 origin/main`.
 
